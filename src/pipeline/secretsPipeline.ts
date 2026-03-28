@@ -1,9 +1,37 @@
 import * as vscode from 'vscode';
 import { findConfig } from '../config/configFinder';
-import { BatchedSecretEntry } from '../config/configTypes';
+import { BatchedSecretEntry, SecretFilter, SecretMap } from '../config/configTypes';
 import { fetchSecrets, getStoredToken } from '../doppler/dopplerClient';
 import { writeDotenv } from '../loaders/dotenvWriter';
 import { parseBatchEntry } from './batchParser';
+
+/**
+ * Filter a secret map using include/exclude regex patterns.
+ *
+ * Include is evaluated first — a key must match ALL include patterns.
+ * Then exclude is applied — a key matching ANY exclude pattern is removed.
+ *
+ * @param secrets - The original secret key-value map
+ * @param filter - Object with optional include and exclude regex pattern arrays
+ * @returns A new SecretMap containing only the matching entries
+ */
+function applySecretFilter(secrets: SecretMap, filter: SecretFilter): SecretMap {
+    const includeRegexes = filter.include?.map(p => new RegExp(p));
+    const excludeRegexes = filter.exclude?.map(p => new RegExp(p));
+    const filtered: SecretMap = {};
+    for (const [key, value] of Object.entries(secrets)) {
+        // Include check: if include patterns exist, key must match ALL
+        if (includeRegexes && !includeRegexes.every(rx => rx.test(key))) {
+            continue;
+        }
+        // Exclude check: if exclude patterns exist, key must NOT match ANY
+        if (excludeRegexes && excludeRegexes.some(rx => rx.test(key))) {
+            continue;
+        }
+        filtered[key] = value;
+    }
+    return filtered;
+}
 
 let activeFetch: Promise<void> | null = null;
 
@@ -157,7 +185,22 @@ export async function processWorkspaceFolder(
                 `Dev Setup: Fetching batch "${batchEntry}" for project "${project}"`,
             );
             const batchSecrets = await fetchSecrets(token, project, batchConfig, outputChannel);
-            batchedResults.push({ batchName: batchEntry, secrets: batchSecrets });
+
+            // Apply secret key filter if configured
+            let filteredSecrets = batchSecrets;
+            if (config.secrets!.filter) {
+                const beforeCount = Object.keys(batchSecrets).length;
+                filteredSecrets = applySecretFilter(batchSecrets, config.secrets!.filter);
+                const afterCount = Object.keys(filteredSecrets).length;
+                const removedCount = beforeCount - afterCount;
+                if (removedCount > 0) {
+                    outputChannel.appendLine(
+                        `  Filtered out ${removedCount} secret(s) from batch "${batchEntry}" that did not match filter patterns`,
+                    );
+                }
+            }
+
+            batchedResults.push({ batchName: batchEntry, secrets: filteredSecrets });
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
             outputChannel.appendLine(

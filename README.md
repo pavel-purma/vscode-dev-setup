@@ -69,6 +69,11 @@ secrets:
   batches:
     - dev
     - staging
+  filter:                        # optional
+    include:
+      - "^DB_"
+    exclude:
+      - "_TEMP$"
 ```
 
 #### JSON (`dev-setup.json`)
@@ -79,7 +84,11 @@ secrets:
     "provider": "doppler",
     "loader": "dotenv",
     "project": "my-doppler-project",
-    "batches": ["dev", "staging"]
+    "batches": ["dev", "staging"],
+    "filter": {
+      "include": ["^DB_"],
+      "exclude": ["_TEMP$"]
+    }
   }
 }
 ```
@@ -92,6 +101,7 @@ secrets:
 | `secrets.loader`   | Yes      | How secrets are written locally. Currently only `dotenv` is supported (writes a `.env` file). |
 | `secrets.project`  | No       | The Doppler project name. If omitted, the **workspace folder name** is used as the default project name. |
 | `secrets.batches`  | Yes      | A list of Doppler configs (environments) to fetch. See [Batch Format](#batch-format). |
+| `secrets.filter`   | No       | An object with optional `include` and `exclude` sub-arrays of regex patterns. See [Filtering Secrets](#filtering-secrets). |
 
 ## Batch Format
 
@@ -105,30 +115,72 @@ batches:
   - staging
 ```
 
-When a batch entry contains **no `/`**, it is treated as a Doppler config name. The project is resolved from `secrets.project` (if set) or defaults to the workspace folder name.
+When a batch entry contains **no `:`**, it is treated as a Doppler config name. The project is resolved from `secrets.project` (if set) or defaults to the workspace folder name.
 
 For example, in a workspace folder named `my-app` with no explicit `project` field:
 
 - `dev` → Doppler project `my-app`, config `dev`
 - `staging` → Doppler project `my-app`, config `staging`
 
-### Explicit Format — `project/config`
+### Explicit Format — `project:config`
 
 ```yaml
 batches:
-  - my-project/dev
-  - shared-infra/production
+  - my-project:dev
+  - shared-infra:production
 ```
 
-When a batch entry contains a **`/`**, the part before the first `/` is the Doppler project and the part after is the config name. This lets you pull secrets from multiple Doppler projects in a single configuration.
+When a batch entry contains a **`:`**, the part before the first `:` is the Doppler project and the part after is the config name. This lets you pull secrets from multiple Doppler projects in a single configuration.
 
 For example:
-- `my-project/dev` → Doppler project `my-project`, config `dev`
-- `shared-infra/production` → Doppler project `shared-infra`, config `production`
+- `my-project:dev` → Doppler project `my-project`, config `dev`
+- `shared-infra:production` → Doppler project `shared-infra`, config `production`
 
 ### Merging Behaviour
 
-Secrets from all batches are **merged** into a single `.env` file. If multiple batches define the same secret key, the **last batch** in the list wins.
+Secrets from all batches are **merged** into a single `.env` file. If multiple batches define the same secret key, the **first batch** in the list wins — later duplicates are commented out.
+
+## Filtering Secrets
+
+The optional `filter` field lets you limit which secrets are written to the `.env` file. It is an object with two optional sub-arrays:
+
+| Sub-field | Description |
+|-----------|-------------|
+| `include` | Array of regex patterns. A secret key must match **all** include patterns to be considered. If omitted, all keys are included by default. |
+| `exclude` | Array of regex patterns. A secret key matching **any** exclude pattern is removed. If omitted, nothing is excluded by default. |
+
+If `filter` is absent, all secrets pass through unchanged. When both `include` and `exclude` are present, include is evaluated first, then exclude filters the result.
+
+**Example:** Given the following secrets in Doppler:
+
+- `DB_HOST`
+- `DB_TEMP`
+- `DB_PORT`
+- `API_KEY`
+
+And this configuration:
+
+```yaml
+secrets:
+  provider: doppler
+  loader: dotenv
+  batches:
+    - dev
+  filter:
+    include:
+      - "^DB_"
+    exclude:
+      - "_TEMP$"
+```
+
+The result:
+
+- `DB_HOST` — **included** (matches include pattern `^DB_`, does not match any exclude pattern)
+- `DB_PORT` — **included** (matches include pattern `^DB_`, does not match any exclude pattern)
+- `DB_TEMP` — **excluded** (matches include pattern `^DB_`, but also matches exclude pattern `_TEMP$`)
+- `API_KEY` — **excluded** (does not match include pattern `^DB_`)
+
+Secrets that are filtered out are logged to the **Dev Setup** output channel for visibility.
 
 ## Output
 

@@ -1,8 +1,18 @@
+/** Filter configuration for secret keys using regex patterns. */
+export interface SecretFilter {
+    /** Regex patterns — a secret key must match ALL patterns to be included. */
+    include?: string[];
+    /** Regex patterns — a secret key matching ANY pattern is excluded. */
+    exclude?: string[];
+}
+
 export interface SecretsConfig {
     provider: string;
     loader: string;
     batches: string[];
     project?: string;
+    /** Optional filter object with include/exclude regex patterns for secret keys. */
+    filter?: SecretFilter;
 }
 
 export interface DevSetupConfig {
@@ -19,7 +29,7 @@ export type SecretMap = Record<string, string>;
 
 /** A batch of secrets with its source identifier. */
 export interface BatchedSecretEntry {
-    /** The raw batch string from config (e.g. "dev" or "my-project/dev"). */
+    /** The raw batch string from config (e.g. "dev" or "my-project:dev"). */
     batchName: string;
     /** The key-value pairs fetched for this batch. */
     secrets: SecretMap;

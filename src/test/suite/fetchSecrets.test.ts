@@ -411,7 +411,7 @@ suite('fetchSecrets Integration', () => {
     test('should write .env file with sorted keys and batch header', async () => {
         const batches: BatchedSecretEntry[] = [
             {
-                batchName: 'my-project/dev',
+                batchName: 'my-project:dev',
                 secrets: {
                     ZEBRA: 'z-value',
                     ALPHA: 'a-value',
@@ -429,7 +429,7 @@ suite('fetchSecrets Integration', () => {
         );
 
         const lines = content.split('\n');
-        assert.strictEqual(lines[0], '# Doppler: my-project/dev');
+        assert.strictEqual(lines[0], '# Doppler: my-project:dev');
         assert.strictEqual(lines[1], 'ALPHA=a-value');
         assert.strictEqual(lines[2], 'MIDDLE=m-value');
         assert.strictEqual(lines[3], 'ZEBRA=z-value');
@@ -439,7 +439,7 @@ suite('fetchSecrets Integration', () => {
     test('should quote values containing special characters', async () => {
         const batches: BatchedSecretEntry[] = [
             {
-                batchName: 'test/dev',
+                batchName: 'test:dev',
                 secrets: {
                     SIMPLE: 'no-special',
                     SPACES: 'hello world',
@@ -460,7 +460,7 @@ suite('fetchSecrets Integration', () => {
 
         const lines = content.split('\n');
         // Line 0: batch header, then keys sorted: EMPTY, HASH, NEWLINE, SIMPLE, SPACES
-        assert.strictEqual(lines[0], '# Doppler: test/dev');
+        assert.strictEqual(lines[0], '# Doppler: test:dev');
         assert.strictEqual(lines[1], 'EMPTY=""', 'Empty values should be quoted');
         assert.strictEqual(lines[2], 'HASH="value#with-hash"', 'Hash values should be quoted');
         assert.strictEqual(lines[3], 'NEWLINE="line1\\nline2"', 'Newlines should be escaped');
@@ -473,14 +473,14 @@ suite('fetchSecrets Integration', () => {
     test('should merge multiple batches with first-writer-wins deduplication', async () => {
         const batches: BatchedSecretEntry[] = [
             {
-                batchName: 'my-project/dev',
+                batchName: 'my-project:dev',
                 secrets: {
                     SHARED: 'dev-val',
                     DEV_ONLY: 'dev-only',
                 },
             },
             {
-                batchName: 'my-project/ci',
+                batchName: 'my-project:ci',
                 secrets: {
                     SHARED: 'ci-val',
                     CI_ONLY: 'ci-only',
@@ -497,20 +497,20 @@ suite('fetchSecrets Integration', () => {
         );
 
         // Expected format:
-        // # Doppler: my-project/dev
+        // # Doppler: my-project:dev
         // DEV_ONLY=dev-only
         // SHARED=dev-val
         //
-        // # Doppler: my-project/ci
-        // # SHARED: duplicate, already defined in "my-project/dev"
+        // # Doppler: my-project:ci
+        // # SHARED: duplicate, already defined in "my-project:dev"
         // CI_ONLY=ci-only
         const expectedEnv = [
-            '# Doppler: my-project/dev',
+            '# Doppler: my-project:dev',
             'DEV_ONLY=dev-only',
             'SHARED=dev-val',
             '',
-            '# Doppler: my-project/ci',
-            '# SHARED: duplicate, already defined in "my-project/dev"',
+            '# Doppler: my-project:ci',
+            '# SHARED: duplicate, already defined in "my-project:dev"',
             'CI_ONLY=ci-only',
             '',
         ].join('\n');
@@ -895,5 +895,643 @@ suite('fetchSecrets Integration', () => {
                 configurable: true,
             });
         }
+    });
+
+    // ── Config Validation: filter field ──────────────────────────────
+
+    test('parseJsonConfig should accept valid filter with include only', () => {
+        const jsonContent = JSON.stringify({
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                filter: { include: ['^DB_'] },
+            },
+        });
+
+        const fakeOutput = createFakeOutputChannel();
+        const raw = new TextEncoder().encode(jsonContent);
+        const config = parseJsonConfig(raw, fakeOutput);
+
+        assert.deepStrictEqual(config.secrets?.filter, { include: ['^DB_'] });
+    });
+
+    test('parseJsonConfig should accept valid filter with exclude only', () => {
+        const jsonContent = JSON.stringify({
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                filter: { exclude: ['^TEMP_'] },
+            },
+        });
+
+        const fakeOutput = createFakeOutputChannel();
+        const raw = new TextEncoder().encode(jsonContent);
+        const config = parseJsonConfig(raw, fakeOutput);
+
+        assert.deepStrictEqual(config.secrets?.filter, { exclude: ['^TEMP_'] });
+    });
+
+    test('parseJsonConfig should accept valid filter with both include and exclude', () => {
+        const jsonContent = JSON.stringify({
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                filter: { include: ['^DB_'], exclude: ['_TEMP$'] },
+            },
+        });
+
+        const fakeOutput = createFakeOutputChannel();
+        const raw = new TextEncoder().encode(jsonContent);
+        const config = parseJsonConfig(raw, fakeOutput);
+
+        assert.deepStrictEqual(config.secrets?.filter, { include: ['^DB_'], exclude: ['_TEMP$'] });
+    });
+
+    test('parseJsonConfig should accept config without filter field', () => {
+        const jsonContent = JSON.stringify({
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+            },
+        });
+
+        const fakeOutput = createFakeOutputChannel();
+        const raw = new TextEncoder().encode(jsonContent);
+        const config = parseJsonConfig(raw, fakeOutput);
+
+        assert.strictEqual(config.secrets?.filter, undefined);
+    });
+
+    test('parseJsonConfig should reject filter that is a plain array', () => {
+        const jsonContent = JSON.stringify({
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                filter: ['^DB_'],
+            },
+        });
+
+        const fakeOutput = createFakeOutputChannel();
+        const raw = new TextEncoder().encode(jsonContent);
+
+        assert.throws(
+            () => parseJsonConfig(raw, fakeOutput),
+            (err: unknown) => {
+                assert.ok(err instanceof Error);
+                assert.ok(
+                    err.message.includes("'secrets.filter' must be an object"),
+                    `Error should mention must be an object, got: "${err.message}"`,
+                );
+                return true;
+            },
+        );
+    });
+
+    test('parseJsonConfig should reject filter with empty include array', () => {
+        const jsonContent = JSON.stringify({
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                filter: { include: [] },
+            },
+        });
+
+        const fakeOutput = createFakeOutputChannel();
+        const raw = new TextEncoder().encode(jsonContent);
+
+        assert.throws(
+            () => parseJsonConfig(raw, fakeOutput),
+            (err: unknown) => {
+                assert.ok(err instanceof Error);
+                assert.ok(
+                    err.message.includes("'secrets.filter.include' must be a non-empty array"),
+                    `Error should mention non-empty array, got: "${err.message}"`,
+                );
+                return true;
+            },
+        );
+    });
+
+    test('parseJsonConfig should reject filter with empty exclude array', () => {
+        const jsonContent = JSON.stringify({
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                filter: { exclude: [] },
+            },
+        });
+
+        const fakeOutput = createFakeOutputChannel();
+        const raw = new TextEncoder().encode(jsonContent);
+
+        assert.throws(
+            () => parseJsonConfig(raw, fakeOutput),
+            (err: unknown) => {
+                assert.ok(err instanceof Error);
+                assert.ok(
+                    err.message.includes("'secrets.filter.exclude' must be a non-empty array"),
+                    `Error should mention non-empty array, got: "${err.message}"`,
+                );
+                return true;
+            },
+        );
+    });
+
+    test('parseJsonConfig should reject filter with neither include nor exclude', () => {
+        const jsonContent = JSON.stringify({
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                filter: {},
+            },
+        });
+
+        const fakeOutput = createFakeOutputChannel();
+        const raw = new TextEncoder().encode(jsonContent);
+
+        assert.throws(
+            () => parseJsonConfig(raw, fakeOutput),
+            (err: unknown) => {
+                assert.ok(err instanceof Error);
+                assert.ok(
+                    err.message.includes("'secrets.filter' must contain at least one of 'include' or 'exclude'"),
+                    `Error should mention at least one key required, got: "${err.message}"`,
+                );
+                return true;
+            },
+        );
+    });
+
+    test('parseJsonConfig should reject filter with invalid regex in include', () => {
+        const jsonContent = JSON.stringify({
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                filter: { include: ['[invalid'] },
+            },
+        });
+
+        const fakeOutput = createFakeOutputChannel();
+        const raw = new TextEncoder().encode(jsonContent);
+
+        assert.throws(
+            () => parseJsonConfig(raw, fakeOutput),
+            (err: unknown) => {
+                assert.ok(err instanceof Error);
+                assert.ok(
+                    err.message.includes("'secrets.filter.include' contains an invalid regex"),
+                    `Error should mention invalid regex, got: "${err.message}"`,
+                );
+                return true;
+            },
+        );
+    });
+
+    test('parseJsonConfig should reject filter with invalid regex in exclude', () => {
+        const jsonContent = JSON.stringify({
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                filter: { exclude: ['[invalid'] },
+            },
+        });
+
+        const fakeOutput = createFakeOutputChannel();
+        const raw = new TextEncoder().encode(jsonContent);
+
+        assert.throws(
+            () => parseJsonConfig(raw, fakeOutput),
+            (err: unknown) => {
+                assert.ok(err instanceof Error);
+                assert.ok(
+                    err.message.includes("'secrets.filter.exclude' contains an invalid regex"),
+                    `Error should mention invalid regex, got: "${err.message}"`,
+                );
+                return true;
+            },
+        );
+    });
+
+    test('parseJsonConfig should reject filter with non-string elements in include', () => {
+        const jsonContent = JSON.stringify({
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                filter: { include: [123] },
+            },
+        });
+
+        const fakeOutput = createFakeOutputChannel();
+        const raw = new TextEncoder().encode(jsonContent);
+
+        assert.throws(
+            () => parseJsonConfig(raw, fakeOutput),
+            (err: unknown) => {
+                assert.ok(err instanceof Error);
+                assert.ok(
+                    err.message.includes("each entry in 'secrets.filter.include' must be a non-empty string"),
+                    `Error should mention non-empty string, got: "${err.message}"`,
+                );
+                return true;
+            },
+        );
+    });
+
+    test('parseJsonConfig should reject filter with unknown keys', () => {
+        const jsonContent = JSON.stringify({
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                filter: { include: ['^DB_'], unknown: true },
+            },
+        });
+
+        const fakeOutput = createFakeOutputChannel();
+        const raw = new TextEncoder().encode(jsonContent);
+
+        assert.throws(
+            () => parseJsonConfig(raw, fakeOutput),
+            (err: unknown) => {
+                assert.ok(err instanceof Error);
+                assert.ok(
+                    err.message.includes("'secrets.filter' contains unknown key"),
+                    `Error should mention unknown key, got: "${err.message}"`,
+                );
+                return true;
+            },
+        );
+    });
+
+    test('parseYamlConfig should accept valid filter in YAML', () => {
+        const yamlContent = [
+            'secrets:',
+            '  provider: doppler',
+            '  loader: dotenv',
+            '  batches:',
+            '    - dev',
+            '  filter:',
+            '    include:',
+            '      - "^DB_"',
+            '    exclude:',
+            '      - "_TEMP$"',
+        ].join('\n');
+
+        const fakeOutput = createFakeOutputChannel();
+        const raw = new TextEncoder().encode(yamlContent);
+        const config = parseYamlConfig(raw, fakeOutput);
+
+        assert.deepStrictEqual(config.secrets?.filter, { include: ['^DB_'], exclude: ['_TEMP$'] });
+    });
+
+    // ── Filter Pipeline Tests ────────────────────────────────────────
+
+    test('include filter keeps only matching secrets', async () => {
+        // 1. Write config with an include filter pattern
+        const config = {
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                project: 'filter-include-project',
+                filter: { include: ['^DB_'] },
+            },
+        };
+        await writeConfigFile(tempDir, config);
+
+        // 2. Install fetch mock with secrets — some match, some don't
+        fetchMock.install();
+        const mockSecrets = {
+            secrets: {
+                DB_HOST: { raw: 'ref', computed: 'localhost' },
+                DB_PORT: { raw: 'ref', computed: '5432' },
+                API_KEY: { raw: 'ref', computed: 'sk-12345' },
+                APP_NAME: { raw: 'ref', computed: 'MyApp' },
+            },
+        };
+        fetchMock.addResponse(
+            'https://api.doppler.com/v3/configs/config/secrets',
+            { status: 200, body: JSON.stringify(mockSecrets) },
+        );
+
+        // 3. Set up fakes
+        const fakeSecrets = createFakeSecretStorage({
+            'dev-setup.dopplerToken': 'dp.test.mock_token',
+        });
+        const fakeOutput = createFakeOutputChannel();
+        const fakeContext = {
+            secrets: fakeSecrets,
+        } as unknown as vscode.ExtensionContext;
+        const fakeFolder: vscode.WorkspaceFolder = {
+            uri: vscode.Uri.file(tempDir),
+            name: 'filter-include-test',
+            index: 0,
+        };
+
+        // 4. Run the pipeline
+        await processWorkspaceFolder(fakeFolder, fakeContext, fakeOutput, false);
+
+        // 5. Read back .env and verify only DB_ secrets are present
+        const envUri = vscode.Uri.joinPath(vscode.Uri.file(tempDir), '.env');
+        const envContent = new TextDecoder().decode(
+            await vscode.workspace.fs.readFile(envUri),
+        );
+
+        const expectedEnv = [
+            '# Doppler: dev',
+            'DB_HOST=localhost',
+            'DB_PORT=5432',
+            '',
+        ].join('\n');
+
+        assert.strictEqual(envContent, expectedEnv, '.env should only contain secrets matching include filter ^DB_');
+
+        // 6. Verify filtering was logged
+        const logLines = fakeOutput.getLines();
+        assert.ok(
+            logLines.some(l => l.includes('Filtered out 2 secret(s)')),
+            'Output should log how many secrets were filtered out',
+        );
+    });
+
+    test('include filter with multiple patterns uses AND logic', async () => {
+        // 1. Write config with multiple include patterns — ALL must match
+        const config = {
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                project: 'filter-include-and-project',
+                filter: { include: ['^DB_', '_URL$'] },
+            },
+        };
+        await writeConfigFile(tempDir, config);
+
+        // 2. Install fetch mock
+        fetchMock.install();
+        const mockSecrets = {
+            secrets: {
+                DB_HOST: { raw: 'ref', computed: 'localhost' },
+                DB_CONNECTION_URL: { raw: 'ref', computed: 'pg://localhost/db' },
+                API_URL: { raw: 'ref', computed: 'https://api.example.com' },
+                APP_NAME: { raw: 'ref', computed: 'MyApp' },
+            },
+        };
+        fetchMock.addResponse(
+            'https://api.doppler.com/v3/configs/config/secrets',
+            { status: 200, body: JSON.stringify(mockSecrets) },
+        );
+
+        // 3. Set up fakes
+        const fakeSecrets = createFakeSecretStorage({
+            'dev-setup.dopplerToken': 'dp.test.mock_token',
+        });
+        const fakeOutput = createFakeOutputChannel();
+        const fakeContext = {
+            secrets: fakeSecrets,
+        } as unknown as vscode.ExtensionContext;
+        const fakeFolder: vscode.WorkspaceFolder = {
+            uri: vscode.Uri.file(tempDir),
+            name: 'filter-include-and-test',
+            index: 0,
+        };
+
+        // 4. Run the pipeline
+        await processWorkspaceFolder(fakeFolder, fakeContext, fakeOutput, false);
+
+        // 5. Read back .env — only DB_CONNECTION_URL matches both ^DB_ AND _URL$
+        const envUri = vscode.Uri.joinPath(vscode.Uri.file(tempDir), '.env');
+        const envContent = new TextDecoder().decode(
+            await vscode.workspace.fs.readFile(envUri),
+        );
+
+        const expectedEnv = [
+            '# Doppler: dev',
+            'DB_CONNECTION_URL=pg://localhost/db',
+            '',
+        ].join('\n');
+
+        assert.strictEqual(envContent, expectedEnv, '.env should only contain secrets matching ALL include patterns');
+
+        // 6. Verify filtering was logged
+        const logLines = fakeOutput.getLines();
+        assert.ok(
+            logLines.some(l => l.includes('Filtered out 3 secret(s)')),
+            'Output should log how many secrets were filtered out',
+        );
+    });
+
+    test('exclude filter removes matching secrets', async () => {
+        // 1. Write config with an exclude filter
+        const config = {
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                project: 'filter-exclude-project',
+                filter: { exclude: ['^TEMP_', '_DEBUG$'] },
+            },
+        };
+        await writeConfigFile(tempDir, config);
+
+        // 2. Install fetch mock
+        fetchMock.install();
+        const mockSecrets = {
+            secrets: {
+                DB_HOST: { raw: 'ref', computed: 'localhost' },
+                TEMP_KEY: { raw: 'ref', computed: 'tmp-val' },
+                APP_DEBUG: { raw: 'ref', computed: 'true' },
+                API_URL: { raw: 'ref', computed: 'https://api.example.com' },
+            },
+        };
+        fetchMock.addResponse(
+            'https://api.doppler.com/v3/configs/config/secrets',
+            { status: 200, body: JSON.stringify(mockSecrets) },
+        );
+
+        // 3. Set up fakes
+        const fakeSecrets = createFakeSecretStorage({
+            'dev-setup.dopplerToken': 'dp.test.mock_token',
+        });
+        const fakeOutput = createFakeOutputChannel();
+        const fakeContext = {
+            secrets: fakeSecrets,
+        } as unknown as vscode.ExtensionContext;
+        const fakeFolder: vscode.WorkspaceFolder = {
+            uri: vscode.Uri.file(tempDir),
+            name: 'filter-exclude-test',
+            index: 0,
+        };
+
+        // 4. Run the pipeline
+        await processWorkspaceFolder(fakeFolder, fakeContext, fakeOutput, false);
+
+        // 5. Read back .env — TEMP_KEY and APP_DEBUG should be excluded
+        const envUri = vscode.Uri.joinPath(vscode.Uri.file(tempDir), '.env');
+        const envContent = new TextDecoder().decode(
+            await vscode.workspace.fs.readFile(envUri),
+        );
+
+        const expectedEnv = [
+            '# Doppler: dev',
+            'API_URL=https://api.example.com',
+            'DB_HOST=localhost',
+            '',
+        ].join('\n');
+
+        assert.strictEqual(envContent, expectedEnv, '.env should not contain secrets matching any exclude pattern');
+
+        // 6. Verify filtering was logged
+        const logLines = fakeOutput.getLines();
+        assert.ok(
+            logLines.some(l => l.includes('Filtered out 2 secret(s)')),
+            'Output should log how many secrets were filtered out',
+        );
+    });
+
+    test('include and exclude together', async () => {
+        // 1. Write config with both include and exclude
+        const config = {
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                project: 'filter-both-project',
+                filter: { include: ['^DB_'], exclude: ['_TEMP$'] },
+            },
+        };
+        await writeConfigFile(tempDir, config);
+
+        // 2. Install fetch mock
+        fetchMock.install();
+        const mockSecrets = {
+            secrets: {
+                DB_HOST: { raw: 'ref', computed: 'localhost' },
+                DB_TEMP: { raw: 'ref', computed: 'tmp-val' },
+                DB_PORT: { raw: 'ref', computed: '5432' },
+                API_KEY: { raw: 'ref', computed: 'sk-12345' },
+            },
+        };
+        fetchMock.addResponse(
+            'https://api.doppler.com/v3/configs/config/secrets',
+            { status: 200, body: JSON.stringify(mockSecrets) },
+        );
+
+        // 3. Set up fakes
+        const fakeSecrets = createFakeSecretStorage({
+            'dev-setup.dopplerToken': 'dp.test.mock_token',
+        });
+        const fakeOutput = createFakeOutputChannel();
+        const fakeContext = {
+            secrets: fakeSecrets,
+        } as unknown as vscode.ExtensionContext;
+        const fakeFolder: vscode.WorkspaceFolder = {
+            uri: vscode.Uri.file(tempDir),
+            name: 'filter-both-test',
+            index: 0,
+        };
+
+        // 4. Run the pipeline
+        await processWorkspaceFolder(fakeFolder, fakeContext, fakeOutput, false);
+
+        // 5. Read back .env — DB_HOST and DB_PORT pass include, DB_TEMP excluded, API_KEY fails include
+        const envUri = vscode.Uri.joinPath(vscode.Uri.file(tempDir), '.env');
+        const envContent = new TextDecoder().decode(
+            await vscode.workspace.fs.readFile(envUri),
+        );
+
+        const expectedEnv = [
+            '# Doppler: dev',
+            'DB_HOST=localhost',
+            'DB_PORT=5432',
+            '',
+        ].join('\n');
+
+        assert.strictEqual(envContent, expectedEnv, '.env should contain secrets matching include but not exclude');
+
+        // 6. Verify filtering was logged
+        const logLines = fakeOutput.getLines();
+        assert.ok(
+            logLines.some(l => l.includes('Filtered out 2 secret(s)')),
+            'Output should log how many secrets were filtered out',
+        );
+    });
+
+    test('no filter means all secrets pass through', async () => {
+        // 1. Write config WITHOUT a filter field
+        const config = {
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                project: 'no-filter-project',
+            },
+        };
+        await writeConfigFile(tempDir, config);
+
+        // 2. Install fetch mock
+        fetchMock.install();
+        const mockSecrets = {
+            secrets: {
+                DB_HOST: { raw: 'ref', computed: 'localhost' },
+                API_KEY: { raw: 'ref', computed: 'sk-12345' },
+                APP_NAME: { raw: 'ref', computed: 'MyApp' },
+            },
+        };
+        fetchMock.addResponse(
+            'https://api.doppler.com/v3/configs/config/secrets',
+            { status: 200, body: JSON.stringify(mockSecrets) },
+        );
+
+        // 3. Set up fakes
+        const fakeSecrets = createFakeSecretStorage({
+            'dev-setup.dopplerToken': 'dp.test.mock_token',
+        });
+        const fakeOutput = createFakeOutputChannel();
+        const fakeContext = {
+            secrets: fakeSecrets,
+        } as unknown as vscode.ExtensionContext;
+        const fakeFolder: vscode.WorkspaceFolder = {
+            uri: vscode.Uri.file(tempDir),
+            name: 'no-filter-test',
+            index: 0,
+        };
+
+        // 4. Run the pipeline
+        await processWorkspaceFolder(fakeFolder, fakeContext, fakeOutput, false);
+
+        // 5. Read back .env — all secrets should be present
+        const envUri = vscode.Uri.joinPath(vscode.Uri.file(tempDir), '.env');
+        const envContent = new TextDecoder().decode(
+            await vscode.workspace.fs.readFile(envUri),
+        );
+
+        const expectedEnv = [
+            '# Doppler: dev',
+            'API_KEY=sk-12345',
+            'APP_NAME=MyApp',
+            'DB_HOST=localhost',
+            '',
+        ].join('\n');
+
+        assert.strictEqual(envContent, expectedEnv, '.env should contain all secrets when no filter is configured');
+
+        // 6. Verify no filtering message in output
+        const logLines = fakeOutput.getLines();
+        assert.ok(
+            !logLines.some(l => l.includes('Filtered out')),
+            'Output should NOT log any filtering message when no filter is configured',
+        );
     });
 });

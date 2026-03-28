@@ -38,6 +38,42 @@ function validateConfig(parsed: unknown, outputChannel: vscode.OutputChannel): D
         if (sec.project !== undefined && (typeof sec.project !== 'string' || sec.project.length === 0)) {
             throw new Error("Invalid dev-setup config: 'secrets.project' must be a non-empty string if provided");
         }
+
+        if (sec.filter !== undefined) {
+            if (typeof sec.filter !== 'object' || sec.filter === null || Array.isArray(sec.filter)) {
+                throw new Error("Invalid dev-setup config: 'secrets.filter' must be an object if provided");
+            }
+
+            const filterObj = sec.filter as Record<string, unknown>;
+            const allowedFilterKeys = new Set(['include', 'exclude']);
+            for (const key of Object.keys(filterObj)) {
+                if (!allowedFilterKeys.has(key)) {
+                    throw new Error(`Invalid dev-setup config: 'secrets.filter' contains unknown key "${key}"`);
+                }
+            }
+
+            if (filterObj.include === undefined && filterObj.exclude === undefined) {
+                throw new Error("Invalid dev-setup config: 'secrets.filter' must contain at least one of 'include' or 'exclude'");
+            }
+
+            for (const prop of ['include', 'exclude'] as const) {
+                if (filterObj[prop] !== undefined) {
+                    if (!Array.isArray(filterObj[prop]) || (filterObj[prop] as unknown[]).length === 0) {
+                        throw new Error(`Invalid dev-setup config: 'secrets.filter.${prop}' must be a non-empty array if provided`);
+                    }
+                    for (const pattern of filterObj[prop] as unknown[]) {
+                        if (typeof pattern !== 'string' || pattern.length === 0) {
+                            throw new Error(`Invalid dev-setup config: each entry in 'secrets.filter.${prop}' must be a non-empty string`);
+                        }
+                        try {
+                            new RegExp(pattern);
+                        } catch {
+                            throw new Error(`Invalid dev-setup config: 'secrets.filter.${prop}' contains an invalid regex: "${pattern}"`);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     const result = parsed as DevSetupConfig;
