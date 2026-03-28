@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
 import { registerLoginToDopplerCommand } from './commands/loginToDoppler';
-import { registerEnterDopplerTokenCommand } from './commands/enterDopplerToken';
 import { registerFetchSecretsCommand } from './commands/fetchSecrets';
 import { onWorkspaceOpen } from './hooks/onWorkspaceOpen';
 
@@ -13,9 +12,6 @@ export function activate(context: vscode.ExtensionContext): void {
     // Register commands
     registerLoginToDopplerCommand(context, outputChannel);
     outputChannel.appendLine('Dev Setup: Registered command "dev-setup.loginToDoppler"');
-
-    registerEnterDopplerTokenCommand(context, outputChannel);
-    outputChannel.appendLine('Dev Setup: Registered command "dev-setup.enterDopplerToken"');
 
     registerFetchSecretsCommand(context, outputChannel);
     outputChannel.appendLine('Dev Setup: Registered command "dev-setup.fetchSecrets"');

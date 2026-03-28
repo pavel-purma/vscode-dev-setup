@@ -2,14 +2,14 @@ import * as vscode from 'vscode';
 import { ConfigLocation } from './configTypes';
 import { parseJsonConfig, parseYamlConfig } from './configParser';
 
-const CONFIG_BASENAMES = [
+const CONFIG_BASE_NAMES = [
     'dev-setup.yaml',
     'dev-setup.yml',
     'dev-setup.json',
 ] as const;
 
-const CONFIG_SUBDIRS = [
-    '.dev',
+const CONFIG_SUB_DIRS = [
+    'dev',
     '',
 ] as const;
 
@@ -37,7 +37,7 @@ async function readFileWithTimeout(
 
 /**
  * Search for a dev-setup config file in the workspace.
- * Checks `.dev/` subfolder first, then the workspace root.
+ * Checks `dev/` subfolder first, then the workspace root.
  * Within each folder, YAML formats (.yaml, .yml) take priority over JSON.
  * Returns the first match or undefined if not found.
  */
@@ -50,8 +50,8 @@ export async function findConfig(
 
     const candidates: { uri: vscode.Uri; filename: string; relativePath: string }[] = [];
 
-    for (const subdir of CONFIG_SUBDIRS) {
-        for (const basename of CONFIG_BASENAMES) {
+    for (const subdir of CONFIG_SUB_DIRS) {
+        for (const basename of CONFIG_BASE_NAMES) {
             const uri = subdir
                 ? vscode.Uri.joinPath(workspaceFolder, subdir, basename)
                 : vscode.Uri.joinPath(workspaceFolder, basename);

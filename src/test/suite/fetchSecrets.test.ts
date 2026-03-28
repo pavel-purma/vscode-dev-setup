@@ -4,7 +4,7 @@ import { findConfig } from '../../config/configFinder';
 import { parseJsonConfig, parseYamlConfig } from '../../config/configParser';
 import { fetchSecrets } from '../../doppler/dopplerClient';
 import { writeDotenv } from '../../loaders/dotenvWriter';
-import { processWorkspaceFolder, fetchSecretsFromConfig, resetConcurrencyGuard } from '../../hooks/onWorkspaceOpen';
+import { processWorkspaceFolder, fetchSecretsFromConfig, resetConcurrencyGuard } from '../../pipeline/secretsPipeline';
 import * as fetchMock from '../helpers/fetchMock';
 import { createFakeSecretStorage } from '../helpers/fakeSecretStorage';
 import { createFakeOutputChannel } from '../helpers/fakeOutputChannel';

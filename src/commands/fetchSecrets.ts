@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { fetchSecretsFromConfig } from '../hooks/onWorkspaceOpen';
+import { fetchSecretsFromConfig } from '../pipeline/secretsPipeline';
 
 export function registerFetchSecretsCommand(
     context: vscode.ExtensionContext,

@@ -32,11 +32,4 @@ suite('Extension Test Suite', () => {
         );
     });
 
-    test('Should register enterDopplerToken command', async () => {
-        const commands = await vscode.commands.getCommands(true);
-        assert.ok(
-            commands.includes('dev-setup.enterDopplerToken'),
-            'Command dev-setup.enterDopplerToken should be registered'
-        );
-    });
 });
