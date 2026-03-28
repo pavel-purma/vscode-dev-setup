@@ -406,6 +406,67 @@ suite('fetchSecrets Integration', () => {
         });
     });
 
+    test('should strip DOPPLER_ prefixed metadata secrets from response', async () => {
+        fetchMock.install();
+        const mockSecrets = {
+            secrets: {
+                DATABASE_URL: { raw: 'pg://ref', computed: 'pg://localhost:5432/mydb' },
+                API_KEY: { raw: '${ref}', computed: 'sk-test-12345' },
+                DOPPLER_PROJECT: { raw: 'my-project', computed: 'my-project' },
+                DOPPLER_CONFIG: { raw: 'dev', computed: 'dev' },
+                DOPPLER_ENVIRONMENT: { raw: 'development', computed: 'development' },
+            },
+        };
+        fetchMock.addResponse(
+            'https://api.doppler.com/v3/configs/config/secrets',
+            { status: 200, body: JSON.stringify(mockSecrets) },
+        );
+
+        const fakeOutput = createFakeOutputChannel();
+        const secrets = await fetchSecrets('dp.test.token', 'proj', 'dev', fakeOutput);
+
+        // Regular secrets should be present
+        assert.strictEqual(secrets['DATABASE_URL'], 'pg://localhost:5432/mydb');
+        assert.strictEqual(secrets['API_KEY'], 'sk-test-12345');
+
+        // DOPPLER_ prefixed metadata secrets should be stripped
+        assert.strictEqual(secrets['DOPPLER_PROJECT'], undefined, 'DOPPLER_PROJECT should be stripped');
+        assert.strictEqual(secrets['DOPPLER_CONFIG'], undefined, 'DOPPLER_CONFIG should be stripped');
+        assert.strictEqual(secrets['DOPPLER_ENVIRONMENT'], undefined, 'DOPPLER_ENVIRONMENT should be stripped');
+
+        // Only the 2 regular secrets should remain
+        assert.strictEqual(Object.keys(secrets).length, 2, 'Only non-DOPPLER_ secrets should remain');
+    });
+
+    test('should keep secrets that happen to contain DOPPLER in the middle of the name', async () => {
+        fetchMock.install();
+        const mockSecrets = {
+            secrets: {
+                MY_DOPPLER_SETTING: { raw: 'custom', computed: 'custom-value' },
+                APP_DOPPLER_KEY: { raw: 'key', computed: 'key-value' },
+                DOPPLER_PROJECT: { raw: 'my-project', computed: 'my-project' },
+                DATABASE_URL: { raw: 'pg://ref', computed: 'pg://localhost:5432/mydb' },
+            },
+        };
+        fetchMock.addResponse(
+            'https://api.doppler.com/v3/configs/config/secrets',
+            { status: 200, body: JSON.stringify(mockSecrets) },
+        );
+
+        const fakeOutput = createFakeOutputChannel();
+        const secrets = await fetchSecrets('dp.test.token', 'proj', 'dev', fakeOutput);
+
+        // Secrets with DOPPLER in the middle should NOT be stripped
+        assert.strictEqual(secrets['MY_DOPPLER_SETTING'], 'custom-value', 'MY_DOPPLER_SETTING should be kept');
+        assert.strictEqual(secrets['APP_DOPPLER_KEY'], 'key-value', 'APP_DOPPLER_KEY should be kept');
+        assert.strictEqual(secrets['DATABASE_URL'], 'pg://localhost:5432/mydb', 'DATABASE_URL should be kept');
+
+        // Only DOPPLER_PROJECT (starts with DOPPLER_) should be stripped
+        assert.strictEqual(secrets['DOPPLER_PROJECT'], undefined, 'DOPPLER_PROJECT should be stripped');
+
+        assert.strictEqual(Object.keys(secrets).length, 3, 'Three non-DOPPLER_ prefixed secrets should remain');
+    });
+
     // ── .env Writing ────────────────────────────────────────────────
 
     test('should write .env file with sorted keys and batch header', async () => {

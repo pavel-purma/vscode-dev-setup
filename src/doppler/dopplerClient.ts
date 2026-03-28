@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { SecretMap } from '../config/configTypes';
 
 const DOPPLER_API_BASE = 'https://api.doppler.com/v3';
+const DOPPLER_METADATA_PREFIX = 'DOPPLER_';
 const SECRET_KEY = 'dev-setup.dopplerToken';
 const FETCH_TIMEOUT_MS = 30_000;
 
@@ -111,6 +112,13 @@ export async function fetchSecrets(token: string, project: string, config: strin
             const secret = value as { raw?: string; computed?: string };
             if (secret.computed !== undefined) {
                 result[key] = secret.computed;
+            }
+        }
+
+        // Strip Doppler automatic metadata secrets (DOPPLER_PROJECT, DOPPLER_CONFIG, etc.)
+        for (const key of Object.keys(result)) {
+            if (key.startsWith(DOPPLER_METADATA_PREFIX)) {
+                delete result[key];
             }
         }
 
