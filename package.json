@@ -15,7 +15,7 @@
   "activationEvents": [
     "onStartupFinished"
   ],
-  "main": "./dist/extension.js",
+  "main": "./build/extension.js",
   "contributes": {
     "commands": [
       {
@@ -32,10 +32,10 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
-    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node",
+    "build": "esbuild src/extension.ts --bundle --outfile=build/extension.js --external:vscode --format=cjs --platform=node",
     "pretest": "npm run compile",
     "test": "vscode-test",
-    "package": "npx @vscode/vsce package --no-dependencies"
+    "package": "npm run build && npx @vscode/vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
