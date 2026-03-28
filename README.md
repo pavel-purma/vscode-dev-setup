@@ -209,6 +209,16 @@ The default Doppler project name for each folder (when `secrets.project` is not 
 | **Dev Setup: Login to Doppler** | Authenticate with Doppler by providing a Personal Token. The token is validated and stored securely. |
 | **Dev Setup: Fetch Secrets**    | Manually trigger secrets fetching for all workspace folders that have a configuration file. |
 
+## Token Storage & Cross-Environment Access
+
+The Doppler token is stored in **VS Code's SecretStorage** on your local (host) machine — not inside your project, container, or remote environment. This means:
+
+- **One-time setup.** You configure the token once via **Dev Setup: Login to Doppler**, and it's available everywhere VS Code runs.
+- **Works across environments.** Whether you're working in a Dev Container, WSL, or a standard local workspace, they all share the same stored token. No need to re-enter it when switching contexts.
+- **Nothing stored in the project.** The token never appears in your repository, workspace files, or container filesystem. It lives at the VS Code installation level on your computer.
+
+In practice, this means you can open the same project in WSL today and in a Dev Container tomorrow without reconfiguring your Doppler credentials.
+
 ## Troubleshooting
 
 - Open the **Output** panel (`Ctrl+Shift+U` / `Cmd+Shift+U`) and select **Dev Setup** from the dropdown to see detailed logs.
