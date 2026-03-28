@@ -13,6 +13,28 @@ const CONFIG_SUBDIRS = [
     '',
 ] as const;
 
+/** Per-file timeout for filesystem read operations (in milliseconds). */
+const READ_FILE_TIMEOUT_MS = 5_000;
+
+/**
+ * Read a file with a timeout. Rejects with an error if the read
+ * does not complete within the specified duration.
+ */
+async function readFileWithTimeout(
+    uri: vscode.Uri,
+    timeoutMs: number = READ_FILE_TIMEOUT_MS,
+): Promise<Uint8Array> {
+    return Promise.race([
+        vscode.workspace.fs.readFile(uri),
+        new Promise<never>((_resolve, reject) => {
+            setTimeout(
+                () => reject(new Error(`Filesystem read timed out after ${timeoutMs}ms: ${uri.toString()}`)),
+                timeoutMs,
+            );
+        }),
+    ]);
+}
+
 /**
  * Search for a dev-setup config file in the workspace.
  * Checks `.dev/` subfolder first, then the workspace root.
@@ -41,7 +63,7 @@ export async function findConfig(
     for (const { uri, filename, relativePath } of candidates) {
         try {
             outputChannel.appendLine(`Dev Setup: Checking for config file: ${relativePath}`);
-            const fileData = await vscode.workspace.fs.readFile(uri);
+            const fileData = await readFileWithTimeout(uri);
             const config = filename.endsWith('.json')
                 ? parseJsonConfig(fileData, outputChannel)
                 : parseYamlConfig(fileData, outputChannel);

@@ -817,4 +817,71 @@ suite('fetchSecrets Integration', () => {
             });
         }
     });
+
+    test('manual invocation should re-run pipeline after automatic fetch completes', async () => {
+        // Write a config so the pipeline has something to process
+        const config = {
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                project: 'rerun-project',
+            },
+        };
+        await writeConfigFile(tempDir, config);
+
+        fetchMock.install();
+
+        let fetchCallCount = 0;
+        fetchMock.addHandler(
+            'https://api.doppler.com/v3/configs/config/secrets',
+            async () => {
+                fetchCallCount++;
+                // Simulate a short delay so both calls overlap
+                await new Promise<void>((resolve) => setTimeout(resolve, 100));
+                return new Response(
+                    JSON.stringify({ secrets: { KEY: { raw: 'v', computed: 'v' } } }),
+                    { status: 200, headers: { 'Content-Type': 'application/json' } },
+                );
+            },
+        );
+
+        const fakeSecrets = createFakeSecretStorage({
+            'dev-setup.dopplerToken': 'dp.test.mock_token',
+        });
+        const fakeOutput = createFakeOutputChannel();
+        const fakeContext = { secrets: fakeSecrets } as unknown as vscode.ExtensionContext;
+
+        // Stub workspaceFolders
+        const originalFolders = vscode.workspace.workspaceFolders;
+        const fakeFolder: vscode.WorkspaceFolder = {
+            uri: vscode.Uri.file(tempDir),
+            name: 'test-workspace',
+            index: 0,
+        };
+        Object.defineProperty(vscode.workspace, 'workspaceFolders', {
+            value: [fakeFolder],
+            configurable: true,
+        });
+
+        try {
+            // Fire automatic (non-manual) fetch first, then manual while it's in progress
+            const promise1 = fetchSecretsFromConfig(fakeContext, fakeOutput, false);
+            const promise2 = fetchSecretsFromConfig(fakeContext, fakeOutput, true);
+
+            await Promise.all([promise1, promise2]);
+
+            // The manual invocation should have re-run the pipeline after the automatic one finished
+            assert.strictEqual(
+                fetchCallCount,
+                2,
+                'Manual invocation should re-run the pipeline after the automatic fetch completes',
+            );
+        } finally {
+            Object.defineProperty(vscode.workspace, 'workspaceFolders', {
+                value: originalFolders,
+                configurable: true,
+            });
+        }
+    });
 });

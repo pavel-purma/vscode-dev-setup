@@ -48,7 +48,10 @@ export async function fetchSecretsFromConfig(
             vscode.window.showInformationMessage('Dev Setup: A secrets fetch is already in progress.');
         }
         await activeFetch;
-        return;
+        if (!manual) {
+            return;
+        }
+        outputChannel.appendLine('Dev Setup: Previous fetch completed, re-running pipeline with manual: true');
     }
 
     const run = async (): Promise<void> => {
