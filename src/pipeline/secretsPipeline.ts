@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { findConfig } from '../config/configFinder';
-import { SecretMap } from '../config/configTypes';
+import { BatchedSecretEntry } from '../config/configTypes';
 import { fetchSecrets, getStoredToken } from '../doppler/dopplerClient';
 import { writeDotenv } from '../loaders/dotenvWriter';
 import { parseBatchEntry } from './batchParser';
@@ -145,7 +145,7 @@ export async function processWorkspaceFolder(
 
     // 7. Fetch secrets from each batch and merge
     outputChannel.appendLine(`Dev Setup: Processing ${batches.length} secret batch(es): ${batches.join(', ')}`);
-    const mergedSecrets: SecretMap = {};
+    const batchedResults: BatchedSecretEntry[] = [];
 
     for (const batchEntry of batches) {
         try {
@@ -157,7 +157,7 @@ export async function processWorkspaceFolder(
                 `Dev Setup: Fetching batch "${batchEntry}" for project "${project}"`,
             );
             const batchSecrets = await fetchSecrets(token, project, batchConfig, outputChannel);
-            Object.assign(mergedSecrets, batchSecrets);
+            batchedResults.push({ batchName: batchEntry, secrets: batchSecrets });
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
             outputChannel.appendLine(
@@ -169,16 +169,24 @@ export async function processWorkspaceFolder(
         }
     }
 
-    outputChannel.appendLine(`Dev Setup: Merged ${Object.keys(mergedSecrets).length} total secrets from ${batches.length} batch(es)`);
+    const seenKeys = new Set<string>();
+    for (const { secrets } of batchedResults) {
+        for (const key of Object.keys(secrets)) {
+            seenKeys.add(key);
+        }
+    }
+    const uniqueKeyCount = seenKeys.size;
 
-    if (Object.keys(mergedSecrets).length === 0) {
+    outputChannel.appendLine(`Dev Setup: Merged ${uniqueKeyCount} total secrets from ${batches.length} batch(es)`);
+
+    if (uniqueKeyCount === 0) {
         outputChannel.appendLine('No secrets fetched — skipping .env write.');
         return;
     }
 
     // 8. Write .env file
     try {
-        await writeDotenv(configDir, mergedSecrets, outputChannel);
+        await writeDotenv(configDir, batchedResults, outputChannel);
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
         outputChannel.appendLine(`[Error] Failed to write .env file: ${message}`);

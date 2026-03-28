@@ -16,3 +16,11 @@ export interface ConfigLocation {
 }
 
 export type SecretMap = Record<string, string>;
+
+/** A batch of secrets with its source identifier. */
+export interface BatchedSecretEntry {
+    /** The raw batch string from config (e.g. "dev" or "my-project/dev"). */
+    batchName: string;
+    /** The key-value pairs fetched for this batch. */
+    secrets: SecretMap;
+}

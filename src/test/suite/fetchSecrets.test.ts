@@ -2,6 +2,7 @@ import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { findConfig } from '../../config/configFinder';
 import { parseJsonConfig, parseYamlConfig } from '../../config/configParser';
+import { BatchedSecretEntry } from '../../config/configTypes';
 import { fetchSecrets } from '../../doppler/dopplerClient';
 import { writeDotenv } from '../../loaders/dotenvWriter';
 import { processWorkspaceFolder, fetchSecretsFromConfig, resetConcurrencyGuard } from '../../pipeline/secretsPipeline';
@@ -407,15 +408,20 @@ suite('fetchSecrets Integration', () => {
 
     // ── .env Writing ────────────────────────────────────────────────
 
-    test('should write .env file with sorted keys', async () => {
-        const secrets = {
-            ZEBRA: 'z-value',
-            ALPHA: 'a-value',
-            MIDDLE: 'm-value',
-        };
+    test('should write .env file with sorted keys and batch header', async () => {
+        const batches: BatchedSecretEntry[] = [
+            {
+                batchName: 'my-project/dev',
+                secrets: {
+                    ZEBRA: 'z-value',
+                    ALPHA: 'a-value',
+                    MIDDLE: 'm-value',
+                },
+            },
+        ];
 
         const fakeOutput = createFakeOutputChannel();
-        await writeDotenv(tempDir, secrets, fakeOutput);
+        await writeDotenv(tempDir, batches, fakeOutput);
 
         const envUri = vscode.Uri.joinPath(vscode.Uri.file(tempDir), '.env');
         const content = new TextDecoder().decode(
@@ -423,23 +429,29 @@ suite('fetchSecrets Integration', () => {
         );
 
         const lines = content.split('\n');
-        assert.strictEqual(lines[0], 'ALPHA=a-value');
-        assert.strictEqual(lines[1], 'MIDDLE=m-value');
-        assert.strictEqual(lines[2], 'ZEBRA=z-value');
-        assert.strictEqual(lines[3], '', 'File should end with trailing newline');
+        assert.strictEqual(lines[0], '# Doppler: my-project/dev');
+        assert.strictEqual(lines[1], 'ALPHA=a-value');
+        assert.strictEqual(lines[2], 'MIDDLE=m-value');
+        assert.strictEqual(lines[3], 'ZEBRA=z-value');
+        assert.strictEqual(lines[4], '', 'File should end with trailing newline');
     });
 
     test('should quote values containing special characters', async () => {
-        const secrets = {
-            SIMPLE: 'no-special',
-            SPACES: 'hello world',
-            EMPTY: '',
-            HASH: 'value#with-hash',
-            NEWLINE: 'line1\nline2',
-        };
+        const batches: BatchedSecretEntry[] = [
+            {
+                batchName: 'test/dev',
+                secrets: {
+                    SIMPLE: 'no-special',
+                    SPACES: 'hello world',
+                    EMPTY: '',
+                    HASH: 'value#with-hash',
+                    NEWLINE: 'line1\nline2',
+                },
+            },
+        ];
 
         const fakeOutput = createFakeOutputChannel();
-        await writeDotenv(tempDir, secrets, fakeOutput);
+        await writeDotenv(tempDir, batches, fakeOutput);
 
         const envUri = vscode.Uri.joinPath(vscode.Uri.file(tempDir), '.env');
         const content = new TextDecoder().decode(
@@ -447,65 +459,63 @@ suite('fetchSecrets Integration', () => {
         );
 
         const lines = content.split('\n');
-        // Keys are sorted: EMPTY, HASH, NEWLINE, SIMPLE, SPACES
-        assert.strictEqual(lines[0], 'EMPTY=""', 'Empty values should be quoted');
-        assert.strictEqual(lines[1], 'HASH="value#with-hash"', 'Hash values should be quoted');
-        assert.strictEqual(lines[2], 'NEWLINE="line1\\nline2"', 'Newlines should be escaped');
-        assert.strictEqual(lines[3], 'SIMPLE=no-special', 'Simple values should not be quoted');
-        assert.strictEqual(lines[4], 'SPACES="hello world"', 'Spaces should be quoted');
+        // Line 0: batch header, then keys sorted: EMPTY, HASH, NEWLINE, SIMPLE, SPACES
+        assert.strictEqual(lines[0], '# Doppler: test/dev');
+        assert.strictEqual(lines[1], 'EMPTY=""', 'Empty values should be quoted');
+        assert.strictEqual(lines[2], 'HASH="value#with-hash"', 'Hash values should be quoted');
+        assert.strictEqual(lines[3], 'NEWLINE="line1\\nline2"', 'Newlines should be escaped');
+        assert.strictEqual(lines[4], 'SIMPLE=no-special', 'Simple values should not be quoted');
+        assert.strictEqual(lines[5], 'SPACES="hello world"', 'Spaces should be quoted');
     });
 
     // ── Multi-Batch Merge ───────────────────────────────────────────
 
-    test('should merge multiple batches with last-batch-wins', async () => {
-        fetchMock.install();
-
-        // First batch response
-        fetchMock.addResponse(
-            'https://api.doppler.com/v3/configs/config/secrets?project=proj&config=dev',
+    test('should merge multiple batches with first-writer-wins deduplication', async () => {
+        const batches: BatchedSecretEntry[] = [
             {
-                status: 200,
-                body: JSON.stringify({
-                    secrets: {
-                        SHARED: { raw: 'dev-val', computed: 'dev-val' },
-                        DEV_ONLY: { raw: 'dev-only', computed: 'dev-only' },
-                    },
-                }),
+                batchName: 'my-project/dev',
+                secrets: {
+                    SHARED: 'dev-val',
+                    DEV_ONLY: 'dev-only',
+                },
             },
-        );
+            {
+                batchName: 'my-project/ci',
+                secrets: {
+                    SHARED: 'ci-val',
+                    CI_ONLY: 'ci-only',
+                },
+            },
+        ];
 
-        // Second batch response — uses the same base URL, so we need a different approach
-        // Since the mock matches by base URL prefix, we'll call fetchSecrets twice
-        // and verify the merge logic manually
         const fakeOutput = createFakeOutputChannel();
-        const batch1 = await fetchSecrets('tok', 'proj', 'dev', fakeOutput);
+        await writeDotenv(tempDir, batches, fakeOutput);
 
-        // Now change the mock response for the second batch
-        fetchMock.restore();
-        fetchMock.install();
-        fetchMock.addResponse(
-            'https://api.doppler.com/v3/configs/config/secrets',
-            {
-                status: 200,
-                body: JSON.stringify({
-                    secrets: {
-                        SHARED: { raw: 'ci-val', computed: 'ci-val' },
-                        CI_ONLY: { raw: 'ci-only', computed: 'ci-only' },
-                    },
-                }),
-            },
+        const envUri = vscode.Uri.joinPath(vscode.Uri.file(tempDir), '.env');
+        const content = new TextDecoder().decode(
+            await vscode.workspace.fs.readFile(envUri),
         );
 
-        const batch2 = await fetchSecrets('tok', 'proj', 'ci', fakeOutput);
+        // Expected format:
+        // # Doppler: my-project/dev
+        // DEV_ONLY=dev-only
+        // SHARED=dev-val
+        //
+        // # Doppler: my-project/ci
+        // # SHARED: duplicate, already defined in "my-project/dev"
+        // CI_ONLY=ci-only
+        const expectedEnv = [
+            '# Doppler: my-project/dev',
+            'DEV_ONLY=dev-only',
+            'SHARED=dev-val',
+            '',
+            '# Doppler: my-project/ci',
+            '# SHARED: duplicate, already defined in "my-project/dev"',
+            'CI_ONLY=ci-only',
+            '',
+        ].join('\n');
 
-        // Merge with Object.assign — matches the production code in onWorkspaceOpen.ts
-        const merged: Record<string, string> = {};
-        Object.assign(merged, batch1);
-        Object.assign(merged, batch2);
-
-        assert.strictEqual(merged['DEV_ONLY'], 'dev-only', 'Unique dev key present');
-        assert.strictEqual(merged['CI_ONLY'], 'ci-only', 'Unique ci key present');
-        assert.strictEqual(merged['SHARED'], 'ci-val', 'Last batch wins on collisions');
+        assert.strictEqual(content, expectedEnv, '.env should use first-writer-wins with duplicate comments');
     });
 
     // ── Full Pipeline ───────────────────────────────────────────────
@@ -578,15 +588,16 @@ suite('fetchSecrets Integration', () => {
             await vscode.workspace.fs.readFile(envUri),
         );
 
-        // 10. Verify .env content (keys sorted alphabetically)
+        // 10. Verify .env content (batch header + keys sorted alphabetically)
         const expectedEnv = [
+            '# Doppler: dev',
             'API_KEY=sk-test-12345',
             'APP_NAME=MyApp',
             'DATABASE_URL=pg://localhost:5432/mydb',
             '',
         ].join('\n');
 
-        assert.strictEqual(envContent, expectedEnv, '.env should contain sorted secrets');
+        assert.strictEqual(envContent, expectedEnv, '.env should contain batch header and sorted secrets');
 
         // 11. Verify output channel logged success
         const logLines = fakeOutput.getLines();
@@ -667,14 +678,15 @@ suite('fetchSecrets Integration', () => {
             await vscode.workspace.fs.readFile(envUri),
         );
 
-        // 10. Verify .env content (keys sorted alphabetically)
+        // 10. Verify .env content (batch header + keys sorted alphabetically)
         const expectedEnv = [
+            '# Doppler: dev',
             'DB_HOST=localhost',
             'DB_PORT=5432',
             '',
         ].join('\n');
 
-        assert.strictEqual(envContent, expectedEnv, '.env should contain sorted secrets from YAML config');
+        assert.strictEqual(envContent, expectedEnv, '.env should contain batch header and sorted secrets from YAML config');
 
         // 11. Verify output channel logged success
         const logLines = fakeOutput.getLines();
