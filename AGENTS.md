@@ -2,7 +2,7 @@
 
 ## Overview
 
-- TypeScript 6+ with strict mode enabled
+- TypeScript 5.8+ with strict mode enabled
 - VS Code Extension targeting ES2022
 - Node.js platform with zero runtime dependencies (only devDependencies)
 

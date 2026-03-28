@@ -6,6 +6,7 @@ export function registerFetchSecretsCommand(
     outputChannel: vscode.OutputChannel,
 ): void {
     const disposable = vscode.commands.registerCommand('dev-setup.fetchSecrets', async () => {
+        outputChannel.appendLine('Dev Setup: Manual fetch secrets command invoked');
         try {
             await fetchSecretsFromConfig(context, outputChannel, true);
         } catch (err) {

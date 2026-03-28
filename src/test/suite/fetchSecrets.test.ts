@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import { findConfig } from '../../config/configFinder';
+import { parseJsonConfig, parseYamlConfig } from '../../config/configParser';
 import { fetchSecrets } from '../../doppler/dopplerClient';
 import { writeDotenv } from '../../loaders/dotenvWriter';
 import { processWorkspaceFolder, fetchSecretsFromConfig, resetConcurrencyGuard } from '../../hooks/onWorkspaceOpen';
@@ -11,6 +12,8 @@ import {
     createTempWorkspace,
     cleanupTempWorkspace,
     writeConfigFile,
+    writeYamlConfigFile,
+    writeRawConfigFile,
 } from '../helpers/tempWorkspace';
 
 suite('fetchSecrets Integration', () => {
@@ -29,7 +32,7 @@ suite('fetchSecrets Integration', () => {
 
     // ── Config Discovery ────────────────────────────────────────────
 
-    test('should discover config in workspace root', async () => {
+    test('should discover JSON config in workspace root', async () => {
         const config = {
             secrets: {
                 provider: 'doppler',
@@ -40,15 +43,17 @@ suite('fetchSecrets Integration', () => {
         };
         await writeConfigFile(tempDir, config);
 
-        const location = await findConfig(vscode.Uri.file(tempDir));
+        const fakeOutput = createFakeOutputChannel();
+        const location = await findConfig(vscode.Uri.file(tempDir), fakeOutput);
 
         assert.ok(location, 'Config should be found');
         assert.strictEqual(location.config.secrets?.project, 'root-project');
         assert.strictEqual(location.config.secrets?.provider, 'doppler');
         assert.deepStrictEqual(location.config.secrets?.batches, ['dev']);
+        assert.strictEqual(location.filename, 'dev-setup.json');
     });
 
-    test('should discover config in dev/ subdirectory', async () => {
+    test('should discover JSON config in .dev/ subdirectory', async () => {
         const config = {
             secrets: {
                 provider: 'doppler',
@@ -57,13 +62,289 @@ suite('fetchSecrets Integration', () => {
                 project: 'sub-project',
             },
         };
-        await writeConfigFile(tempDir, config, 'dev');
+        await writeConfigFile(tempDir, config, '.dev');
 
-        const location = await findConfig(vscode.Uri.file(tempDir));
+        const fakeOutput = createFakeOutputChannel();
+        const location = await findConfig(vscode.Uri.file(tempDir), fakeOutput);
 
-        assert.ok(location, 'Config should be found in dev/ subdir');
+        assert.ok(location, 'Config should be found in .dev/ subdir');
         assert.strictEqual(location.config.secrets?.project, 'sub-project');
         assert.deepStrictEqual(location.config.secrets?.batches, ['staging']);
+        assert.strictEqual(location.filename, 'dev-setup.json');
+    });
+
+    // ── YAML Config Discovery ───────────────────────────────────────
+
+    test('should discover dev-setup.yaml in workspace root', async () => {
+        const config = {
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                project: 'yaml-project',
+            },
+        };
+        await writeYamlConfigFile(tempDir, config, 'dev-setup.yaml');
+
+        const fakeOutput = createFakeOutputChannel();
+        const location = await findConfig(vscode.Uri.file(tempDir), fakeOutput);
+
+        assert.ok(location, 'YAML config should be found');
+        assert.strictEqual(location.config.secrets?.project, 'yaml-project');
+        assert.strictEqual(location.config.secrets?.provider, 'doppler');
+        assert.deepStrictEqual(location.config.secrets?.batches, ['dev']);
+        assert.strictEqual(location.filename, 'dev-setup.yaml');
+    });
+
+    test('should discover dev-setup.yml in workspace root', async () => {
+        const config = {
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['prod'],
+                project: 'yml-project',
+            },
+        };
+        await writeYamlConfigFile(tempDir, config, 'dev-setup.yml');
+
+        const fakeOutput = createFakeOutputChannel();
+        const location = await findConfig(vscode.Uri.file(tempDir), fakeOutput);
+
+        assert.ok(location, 'YML config should be found');
+        assert.strictEqual(location.config.secrets?.project, 'yml-project');
+        assert.strictEqual(location.config.secrets?.provider, 'doppler');
+        assert.deepStrictEqual(location.config.secrets?.batches, ['prod']);
+        assert.strictEqual(location.filename, 'dev-setup.yml');
+    });
+
+    test('.dev/dev-setup.yaml should have higher priority than root dev-setup.json', async () => {
+        // Place JSON in workspace root
+        const jsonConfig = {
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['json-batch'],
+                project: 'json-project',
+            },
+        };
+        await writeConfigFile(tempDir, jsonConfig);
+
+        // Place YAML in .dev/ subdir (higher priority)
+        const yamlConfig = {
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['yaml-batch'],
+                project: 'yaml-project',
+            },
+        };
+        await writeYamlConfigFile(tempDir, yamlConfig, 'dev-setup.yaml', '.dev');
+
+        const fakeOutput = createFakeOutputChannel();
+        const location = await findConfig(vscode.Uri.file(tempDir), fakeOutput);
+
+        assert.ok(location, 'Config should be found');
+        assert.strictEqual(location.config.secrets?.project, 'yaml-project', '.dev/ YAML should win over root JSON');
+        assert.strictEqual(location.filename, 'dev-setup.yaml');
+    });
+
+    test('.dev/dev-setup.json should have higher priority than root dev-setup.yaml', async () => {
+        // Place YAML in workspace root
+        const yamlConfig = {
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['yaml-batch'],
+                project: 'yaml-root-project',
+            },
+        };
+        await writeYamlConfigFile(tempDir, yamlConfig, 'dev-setup.yaml');
+
+        // Place JSON in .dev/ subdir (higher priority)
+        const jsonConfig = {
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['json-batch'],
+                project: 'json-subdir-project',
+            },
+        };
+        await writeConfigFile(tempDir, jsonConfig, '.dev');
+
+        const fakeOutput = createFakeOutputChannel();
+        const location = await findConfig(vscode.Uri.file(tempDir), fakeOutput);
+
+        assert.ok(location, 'Config should be found');
+        assert.strictEqual(location.config.secrets?.project, 'json-subdir-project', '.dev/ JSON should win over root YAML');
+        assert.strictEqual(location.filename, 'dev-setup.json');
+    });
+
+    test('YAML in .dev/ should take priority over YAML in root', async () => {
+        // Place YAML in workspace root
+        const rootConfig = {
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['root-batch'],
+                project: 'root-yaml',
+            },
+        };
+        await writeYamlConfigFile(tempDir, rootConfig, 'dev-setup.yaml');
+
+        // Place YAML in .dev/ subdir (higher priority)
+        const subConfig = {
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['sub-batch'],
+                project: 'sub-yaml',
+            },
+        };
+        await writeYamlConfigFile(tempDir, subConfig, 'dev-setup.yaml', '.dev');
+
+        const fakeOutput = createFakeOutputChannel();
+        const location = await findConfig(vscode.Uri.file(tempDir), fakeOutput);
+
+        assert.ok(location, 'Config should be found');
+        assert.strictEqual(location.config.secrets?.project, 'sub-yaml', '.dev/ YAML should win over root YAML');
+        assert.strictEqual(location.filename, 'dev-setup.yaml');
+    });
+
+    // ── YAML Parsing ────────────────────────────────────────────────
+
+    test('parseYamlConfig should parse valid YAML with same validation as JSON', async () => {
+        const yamlContent = [
+            'secrets:',
+            '  provider: doppler',
+            '  loader: dotenv',
+            '  batches:',
+            '    - dev',
+            '    - staging',
+            '  project: my-project',
+        ].join('\n');
+
+        const fakeOutput = createFakeOutputChannel();
+        const raw = new TextEncoder().encode(yamlContent);
+        const config = parseYamlConfig(raw, fakeOutput);
+
+        assert.strictEqual(config.secrets?.provider, 'doppler');
+        assert.strictEqual(config.secrets?.loader, 'dotenv');
+        assert.deepStrictEqual(config.secrets?.batches, ['dev', 'staging']);
+        assert.strictEqual(config.secrets?.project, 'my-project');
+    });
+
+    test('parseYamlConfig should accept config without secrets section', async () => {
+        const yamlContent = '# empty config\n{}';
+
+        const fakeOutput = createFakeOutputChannel();
+        const raw = new TextEncoder().encode(yamlContent);
+        const config = parseYamlConfig(raw, fakeOutput);
+
+        assert.strictEqual(config.secrets, undefined, 'Config without secrets should parse successfully');
+    });
+
+    test('parseYamlConfig should reject invalid YAML content', async () => {
+        // Tabs in YAML indentation can cause parse errors
+        const invalidYaml = ':\n  - [\ninvalid:\n  {{bad}}';
+
+        const fakeOutput = createFakeOutputChannel();
+        const raw = new TextEncoder().encode(invalidYaml);
+
+        assert.throws(
+            () => parseYamlConfig(raw, fakeOutput),
+            (err: unknown) => {
+                assert.ok(err instanceof Error);
+                assert.ok(err.message.includes('Failed to parse dev-setup YAML config'));
+                return true;
+            },
+        );
+    });
+
+    test('parseYamlConfig should reject YAML with missing required fields', async () => {
+        const yamlContent = [
+            'secrets:',
+            '  provider: doppler',
+            // missing 'loader' field
+            '  batches:',
+            '    - dev',
+        ].join('\n');
+
+        const fakeOutput = createFakeOutputChannel();
+        const raw = new TextEncoder().encode(yamlContent);
+
+        assert.throws(
+            () => parseYamlConfig(raw, fakeOutput),
+            (err: unknown) => {
+                assert.ok(err instanceof Error);
+                assert.ok(
+                    err.message.includes("'secrets.loader'"),
+                    `Error should mention secrets.loader, got: "${err.message}"`,
+                );
+                return true;
+            },
+        );
+    });
+
+    test('parseYamlConfig should reject YAML with empty batches array', async () => {
+        const yamlContent = [
+            'secrets:',
+            '  provider: doppler',
+            '  loader: dotenv',
+            '  batches: []',
+        ].join('\n');
+
+        const fakeOutput = createFakeOutputChannel();
+        const raw = new TextEncoder().encode(yamlContent);
+
+        assert.throws(
+            () => parseYamlConfig(raw, fakeOutput),
+            (err: unknown) => {
+                assert.ok(err instanceof Error);
+                assert.ok(
+                    err.message.includes("'secrets.batches'"),
+                    `Error should mention secrets.batches, got: "${err.message}"`,
+                );
+                return true;
+            },
+        );
+    });
+
+    test('parseJsonConfig should still work correctly', async () => {
+        const jsonContent = JSON.stringify({
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                project: 'json-test',
+            },
+        });
+
+        const fakeOutput = createFakeOutputChannel();
+        const raw = new TextEncoder().encode(jsonContent);
+        const config = parseJsonConfig(raw, fakeOutput);
+
+        assert.strictEqual(config.secrets?.provider, 'doppler');
+        assert.strictEqual(config.secrets?.project, 'json-test');
+    });
+
+    test('findConfig should parse YAML file found via discovery', async () => {
+        const yamlContent = [
+            'secrets:',
+            '  provider: doppler',
+            '  loader: dotenv',
+            '  batches:',
+            '    - production',
+            '  project: discovered-yaml',
+        ].join('\n');
+
+        await writeRawConfigFile(tempDir, 'dev-setup.yaml', yamlContent);
+
+        const fakeOutput = createFakeOutputChannel();
+        const location = await findConfig(vscode.Uri.file(tempDir), fakeOutput);
+
+        assert.ok(location, 'YAML config should be discovered');
+        assert.strictEqual(location.config.secrets?.project, 'discovered-yaml');
+        assert.strictEqual(location.filename, 'dev-setup.yaml');
     });
 
     // ── Doppler API Interaction ─────────────────────────────────────
@@ -75,7 +356,8 @@ suite('fetchSecrets Integration', () => {
             { status: 200, body: JSON.stringify({ secrets: {} }) },
         );
 
-        await fetchSecrets('dp.test.mock_token', 'test-project', 'dev');
+        const fakeOutput = createFakeOutputChannel();
+        await fetchSecrets('dp.test.mock_token', 'test-project', 'dev', fakeOutput);
 
         const calls = fetchMock.getCalls();
         assert.strictEqual(calls.length, 1, 'fetch should be called exactly once');
@@ -113,7 +395,8 @@ suite('fetchSecrets Integration', () => {
             { status: 200, body: JSON.stringify(mockSecrets) },
         );
 
-        const secrets = await fetchSecrets('dp.test.token', 'proj', 'dev');
+        const fakeOutput = createFakeOutputChannel();
+        const secrets = await fetchSecrets('dp.test.token', 'proj', 'dev', fakeOutput);
 
         assert.deepStrictEqual(secrets, {
             DATABASE_URL: 'pg://localhost:5432/mydb',
@@ -131,7 +414,8 @@ suite('fetchSecrets Integration', () => {
             MIDDLE: 'm-value',
         };
 
-        await writeDotenv(tempDir, secrets);
+        const fakeOutput = createFakeOutputChannel();
+        await writeDotenv(tempDir, secrets, fakeOutput);
 
         const envUri = vscode.Uri.joinPath(vscode.Uri.file(tempDir), '.env');
         const content = new TextDecoder().decode(
@@ -154,7 +438,8 @@ suite('fetchSecrets Integration', () => {
             NEWLINE: 'line1\nline2',
         };
 
-        await writeDotenv(tempDir, secrets);
+        const fakeOutput = createFakeOutputChannel();
+        await writeDotenv(tempDir, secrets, fakeOutput);
 
         const envUri = vscode.Uri.joinPath(vscode.Uri.file(tempDir), '.env');
         const content = new TextDecoder().decode(
@@ -192,7 +477,8 @@ suite('fetchSecrets Integration', () => {
         // Second batch response — uses the same base URL, so we need a different approach
         // Since the mock matches by base URL prefix, we'll call fetchSecrets twice
         // and verify the merge logic manually
-        const batch1 = await fetchSecrets('tok', 'proj', 'dev');
+        const fakeOutput = createFakeOutputChannel();
+        const batch1 = await fetchSecrets('tok', 'proj', 'dev', fakeOutput);
 
         // Now change the mock response for the second batch
         fetchMock.restore();
@@ -210,7 +496,7 @@ suite('fetchSecrets Integration', () => {
             },
         );
 
-        const batch2 = await fetchSecrets('tok', 'proj', 'ci');
+        const batch2 = await fetchSecrets('tok', 'proj', 'ci', fakeOutput);
 
         // Merge with Object.assign — matches the production code in onWorkspaceOpen.ts
         const merged: Record<string, string> = {};
@@ -224,7 +510,7 @@ suite('fetchSecrets Integration', () => {
 
     // ── Full Pipeline ───────────────────────────────────────────────
 
-    test('full pipeline: config → fetch → .env write', async () => {
+    test('full pipeline: JSON config → fetch → .env write', async () => {
         // 1. Write dev-setup.json config
         const config = {
             secrets: {
@@ -314,6 +600,90 @@ suite('fetchSecrets Integration', () => {
         );
     });
 
+    test('full pipeline: YAML config → fetch → .env write', async () => {
+        // 1. Write dev-setup.yaml config
+        const config = {
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                project: 'yaml-pipeline-project',
+            },
+        };
+        await writeYamlConfigFile(tempDir, config, 'dev-setup.yaml');
+
+        // 2. Install fetch mock with Doppler response
+        fetchMock.install();
+        const mockSecrets = {
+            secrets: {
+                DB_HOST: { raw: 'ref', computed: 'localhost' },
+                DB_PORT: { raw: 'ref', computed: '5432' },
+            },
+        };
+        fetchMock.addResponse(
+            'https://api.doppler.com/v3/configs/config/secrets',
+            { status: 200, body: JSON.stringify(mockSecrets) },
+        );
+
+        // 3. Create fake SecretStorage with a stored Doppler token
+        const fakeSecrets = createFakeSecretStorage({
+            'dev-setup.dopplerToken': 'dp.test.mock_token',
+        });
+
+        // 4. Create fake OutputChannel
+        const fakeOutput = createFakeOutputChannel();
+
+        // 5. Build a minimal ExtensionContext with the fake secrets
+        const fakeContext = {
+            secrets: fakeSecrets,
+        } as unknown as vscode.ExtensionContext;
+
+        // 6. Build a minimal WorkspaceFolder pointing at the temp dir
+        const fakeFolder: vscode.WorkspaceFolder = {
+            uri: vscode.Uri.file(tempDir),
+            name: 'yaml-test-workspace',
+            index: 0,
+        };
+
+        // 7. Run the pipeline
+        await processWorkspaceFolder(
+            fakeFolder,
+            fakeContext,
+            fakeOutput,
+            false,
+        );
+
+        // 8. Verify fetch was called
+        const calls = fetchMock.getCalls();
+        assert.strictEqual(calls.length, 1, 'fetch should be called once');
+        assert.ok(
+            calls[0].url.includes('project=yaml-pipeline-project'),
+            'URL should contain YAML project param',
+        );
+
+        // 9. Read back the .env file
+        const envUri = vscode.Uri.joinPath(vscode.Uri.file(tempDir), '.env');
+        const envContent = new TextDecoder().decode(
+            await vscode.workspace.fs.readFile(envUri),
+        );
+
+        // 10. Verify .env content (keys sorted alphabetically)
+        const expectedEnv = [
+            'DB_HOST=localhost',
+            'DB_PORT=5432',
+            '',
+        ].join('\n');
+
+        assert.strictEqual(envContent, expectedEnv, '.env should contain sorted secrets from YAML config');
+
+        // 11. Verify output channel logged success
+        const logLines = fakeOutput.getLines();
+        assert.ok(
+            logLines.some(l => l.includes('Secrets loaded successfully')),
+            'Output should log success message',
+        );
+    });
+
     // ── Timeout Handling ─────────────────────────────────────────────
 
     test('should throw on fetch timeout (AbortSignal)', async () => {
@@ -362,8 +732,9 @@ suite('fetchSecrets Integration', () => {
         AbortSignal.timeout = ((): AbortSignal => origTimeout.call(AbortSignal, 100)) as typeof AbortSignal.timeout;
 
         try {
+            const fakeOutput = createFakeOutputChannel();
             await assert.rejects(
-                () => fetchSecrets('dp.test.token', 'proj', 'dev'),
+                () => fetchSecrets('dp.test.token', 'proj', 'dev', fakeOutput),
                 (err: any) => {
                     assert.ok(err instanceof Error, 'Should throw an Error');
                     assert.ok(

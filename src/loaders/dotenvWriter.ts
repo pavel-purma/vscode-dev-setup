@@ -5,8 +5,12 @@ import { SecretMap } from '../config/configTypes';
  * Write a SecretMap to a .env file in the given directory.
  * Values containing spaces, special characters, or quotes are wrapped in double quotes.
  */
-export async function writeDotenv(directory: string, secrets: SecretMap): Promise<string> {
+export async function writeDotenv(directory: string, secrets: SecretMap, outputChannel: vscode.OutputChannel): Promise<string> {
     const keys = Object.keys(secrets).sort();
+    const envUri = vscode.Uri.joinPath(vscode.Uri.file(directory), '.env');
+
+    outputChannel.appendLine(`Dev Setup: Writing ${keys.length} secrets to .env file at "${envUri.fsPath}"`);
+
     const lines: string[] = [];
 
     for (const key of keys) {
@@ -15,10 +19,10 @@ export async function writeDotenv(directory: string, secrets: SecretMap): Promis
     }
 
     const content = lines.join('\n') + '\n';
-    const envUri = vscode.Uri.joinPath(vscode.Uri.file(directory), '.env');
 
     await vscode.workspace.fs.writeFile(envUri, new TextEncoder().encode(content));
 
+    outputChannel.appendLine(`Dev Setup: .env file written successfully at "${envUri.fsPath}"`);
     return envUri.fsPath;
 }
 

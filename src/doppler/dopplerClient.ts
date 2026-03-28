@@ -21,7 +21,9 @@ export interface DopplerTokenInfo {
  * Validate a Doppler token by calling GET /v3/me
  * Returns token info if valid, throws on failure.
  */
-export async function validateToken(token: string): Promise<DopplerTokenInfo> {
+export async function validateToken(token: string, outputChannel: vscode.OutputChannel): Promise<DopplerTokenInfo> {
+    outputChannel.appendLine('Dev Setup: Validating Doppler token...');
+
     try {
         const response = await fetch(`${DOPPLER_API_BASE}/me`, {
             method: 'GET',
@@ -38,7 +40,9 @@ export async function validateToken(token: string): Promise<DopplerTokenInfo> {
         }
 
         const data = await response.json() as any;
-        return data as DopplerTokenInfo;
+        const info = data as DopplerTokenInfo;
+        outputChannel.appendLine(`Dev Setup: Token validated — workplace: "${info.workplace?.name ?? 'unknown'}", token: "${info.slug ?? 'unknown'}"`);
+        return info;
     } catch (err) {
         // AbortSignal.timeout() throws TimeoutError; AbortError covers manual abort scenarios
         if (err instanceof DOMException && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
@@ -74,7 +78,9 @@ export async function deleteStoredToken(secrets: vscode.SecretStorage): Promise<
  * Fetch all secrets for a given Doppler project and config (batch).
  * Returns a flat Record<string, string> mapping secret names to their computed values.
  */
-export async function fetchSecrets(token: string, project: string, config: string): Promise<SecretMap> {
+export async function fetchSecrets(token: string, project: string, config: string, outputChannel: vscode.OutputChannel): Promise<SecretMap> {
+    outputChannel.appendLine(`Dev Setup: Fetching secrets from Doppler — project: "${project}", config: "${config}"`);
+
     const url = new URL(`${DOPPLER_API_BASE}/configs/config/secrets`);
     url.searchParams.set('project', project);
     url.searchParams.set('config', config);
@@ -108,10 +114,12 @@ export async function fetchSecrets(token: string, project: string, config: strin
             }
         }
 
+        outputChannel.appendLine(`Dev Setup: Fetched ${Object.keys(result).length} secrets from Doppler for config "${config}"`);
         return result;
     } catch (err) {
         // AbortSignal.timeout() throws TimeoutError; AbortError covers manual abort scenarios
         if (err instanceof DOMException && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+            outputChannel.appendLine('Dev Setup: [Error] Doppler API request timed out after 30s');
             vscode.window.showErrorMessage(`Dev Setup: Request timed out fetching secrets for project "${project}", config "${config}".`);
             throw new Error(`Request timed out fetching secrets for project "${project}", config "${config}".`);
         }

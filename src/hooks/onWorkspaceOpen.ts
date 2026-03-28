@@ -18,6 +18,7 @@ export function resetConcurrencyGuard(): void {
  * for each workspace folder that contains a dev-setup.json.
  */
 export async function onWorkspaceOpen(context: vscode.ExtensionContext, outputChannel: vscode.OutputChannel): Promise<void> {
+    outputChannel.appendLine('Dev Setup: Workspace open hook triggered');
     try {
         await fetchSecretsFromConfig(context, outputChannel, false);
     } catch (err) {
@@ -39,7 +40,10 @@ export async function fetchSecretsFromConfig(
     outputChannel: vscode.OutputChannel,
     manual: boolean = false,
 ): Promise<void> {
+    outputChannel.appendLine(`Dev Setup: Starting secrets fetch pipeline (manual: ${manual})`);
+
     if (activeFetch) {
+        outputChannel.appendLine('Dev Setup: Fetch already in progress, waiting for completion...');
         if (manual) {
             vscode.window.showInformationMessage('Dev Setup: A secrets fetch is already in progress.');
         }
@@ -59,6 +63,7 @@ export async function fetchSecretsFromConfig(
         }
 
         for (const folder of folders) {
+            outputChannel.appendLine(`Dev Setup: Processing workspace folder: "${folder.name}" (${folder.uri.toString()})`);
             try {
                 await processWorkspaceFolder(folder, context, outputChannel, manual);
             } catch (error: unknown) {
@@ -84,7 +89,7 @@ export async function processWorkspaceFolder(
     manual: boolean,
 ): Promise<void> {
     // 1. Find config
-    const location = await findConfig(folder.uri);
+    const location = await findConfig(folder.uri, outputChannel);
     if (!location) {
         if (manual) {
             vscode.window.showWarningMessage(
@@ -122,26 +127,31 @@ export async function processWorkspaceFolder(
     }
 
     // 5. Retrieve Doppler token
+    outputChannel.appendLine('Dev Setup: Retrieving stored Doppler token...');
     const token = await getStoredToken(context.secrets);
     if (!token) {
+        outputChannel.appendLine('Dev Setup: No Doppler token found');
         vscode.window.showInformationMessage(
             "Doppler token not configured. Use 'Enter Doppler Token' command first.",
         );
         return;
     }
 
+    outputChannel.appendLine('Dev Setup: Doppler token found');
+
     // 6. Determine project name
     const project = configProject || folder.name;
 
     // 7. Fetch secrets from each batch and merge
+    outputChannel.appendLine(`Dev Setup: Processing ${batches.length} secret batch(es): ${batches.join(', ')}`);
     const mergedSecrets: SecretMap = {};
 
     for (const batchName of batches) {
         try {
             outputChannel.appendLine(
-                `Fetching secrets for project "${project}", config "${batchName}"...`,
+                `Dev Setup: Fetching batch "${batchName}" for project "${project}"`,
             );
-            const batchSecrets = await fetchSecrets(token, project, batchName);
+            const batchSecrets = await fetchSecrets(token, project, batchName, outputChannel);
             Object.assign(mergedSecrets, batchSecrets);
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
@@ -154,6 +164,8 @@ export async function processWorkspaceFolder(
         }
     }
 
+    outputChannel.appendLine(`Dev Setup: Merged ${Object.keys(mergedSecrets).length} total secrets from ${batches.length} batch(es)`);
+
     if (Object.keys(mergedSecrets).length === 0) {
         outputChannel.appendLine('No secrets fetched — skipping .env write.');
         return;
@@ -161,8 +173,8 @@ export async function processWorkspaceFolder(
 
     // 8. Write .env file
     try {
-        await writeDotenv(configDir, mergedSecrets);
-    } catch (error: any) {
+        await writeDotenv(configDir, mergedSecrets, outputChannel);
+    } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
         outputChannel.appendLine(`[Error] Failed to write .env file: ${message}`);
         vscode.window.showErrorMessage(`Dev Setup: Failed to write .env file — ${message}`);
