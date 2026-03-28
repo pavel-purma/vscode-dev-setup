@@ -47,7 +47,7 @@ export async function fetchSecretsFromConfig(
     }
 }
 
-async function processWorkspaceFolder(
+export async function processWorkspaceFolder(
     folder: vscode.WorkspaceFolder,
     context: vscode.ExtensionContext,
     outputChannel: vscode.OutputChannel,
