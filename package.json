@@ -3,6 +3,8 @@
   "displayName": "Dev Setup",
   "description": "Short-lived developer environment setup manager",
   "version": "0.0.1",
+  "publisher": "pavel-purma",
+  "author": "Pavel Purma <pavel@purma.cz> (https://github.com/pavel-purma)",
   "license": "MIT",
   "repository": {
     "type": "git",
