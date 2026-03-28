@@ -16,7 +16,7 @@ export function activate(context: vscode.ExtensionContext): void {
     registerFetchSecretsCommand(context, outputChannel);
 
     // Run workspace-open hook
-    onWorkspaceOpen(context, outputChannel);
+    void onWorkspaceOpen(context, outputChannel);
 }
 
 export function deactivate(): void {

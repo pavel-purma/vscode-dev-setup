@@ -4,19 +4,32 @@ import { SecretMap } from '../config/configTypes';
 import { fetchSecrets, getStoredToken } from '../doppler/dopplerClient';
 import { writeDotenv } from '../loaders/dotenvWriter';
 
+let activeFetch: Promise<void> | null = null;
+
+/**
+ * Reset the concurrency guard. Intended for use in tests only.
+ */
+export function resetConcurrencyGuard(): void {
+    activeFetch = null;
+}
+
 /**
  * Hook called on workspace open. Triggers the secrets-fetch pipeline
  * for each workspace folder that contains a dev-setup.json.
  */
-export function onWorkspaceOpen(context: vscode.ExtensionContext, outputChannel: vscode.OutputChannel): void {
-    fetchSecretsFromConfig(context, outputChannel, false).catch(err => {
+export async function onWorkspaceOpen(context: vscode.ExtensionContext, outputChannel: vscode.OutputChannel): Promise<void> {
+    try {
+        await fetchSecretsFromConfig(context, outputChannel, false);
+    } catch (err) {
         outputChannel.appendLine(`[Error] Unexpected: ${err instanceof Error ? err.message : String(err)}`);
-    });
+    }
 }
 
 /**
  * Orchestrate the full secrets-fetch pipeline for all workspace folders.
  * Can be called from the workspace-open hook or the manual command.
+ * If a fetch is already in progress, the second invocation awaits
+ * the first rather than spawning a duplicate pipeline.
  *
  * @param manual — when `true` (manual command), missing config triggers an
  *   interactive warning; when `false` (workspace-open), it only logs silently.
@@ -26,24 +39,41 @@ export async function fetchSecretsFromConfig(
     outputChannel: vscode.OutputChannel,
     manual: boolean = false,
 ): Promise<void> {
-    const folders = vscode.workspace.workspaceFolders;
-    if (!folders || folders.length === 0) {
+    if (activeFetch) {
         if (manual) {
-            vscode.window.showWarningMessage(
-                'Dev Setup: No workspace folder is open. Open a folder first.',
-            );
+            vscode.window.showInformationMessage('Dev Setup: A secrets fetch is already in progress.');
         }
+        await activeFetch;
         return;
     }
 
-    for (const folder of folders) {
-        try {
-            await processWorkspaceFolder(folder, context, outputChannel, manual);
-        } catch (error: any) {
-            const message = error.message || String(error);
-            outputChannel.appendLine(`[Error] ${folder.name}: ${message}`);
-            vscode.window.showErrorMessage(`Dev Setup: Error processing "${folder.name}" — ${message}`);
+    const run = async (): Promise<void> => {
+        const folders = vscode.workspace.workspaceFolders;
+        if (!folders || folders.length === 0) {
+            if (manual) {
+                vscode.window.showWarningMessage(
+                    'Dev Setup: No workspace folder is open. Open a folder first.',
+                );
+            }
+            return;
         }
+
+        for (const folder of folders) {
+            try {
+                await processWorkspaceFolder(folder, context, outputChannel, manual);
+            } catch (error: unknown) {
+                const message = error instanceof Error ? error.message : String(error);
+                outputChannel.appendLine(`[Error] ${folder.name}: ${message}`);
+                vscode.window.showErrorMessage(`Dev Setup: Error processing "${folder.name}" — ${message}`);
+            }
+        }
+    };
+
+    try {
+        activeFetch = run();
+        await activeFetch;
+    } finally {
+        activeFetch = null;
     }
 }
 
@@ -113,8 +143,8 @@ export async function processWorkspaceFolder(
             );
             const batchSecrets = await fetchSecrets(token, project, batchName);
             Object.assign(mergedSecrets, batchSecrets);
-        } catch (error: any) {
-            const message = error.message || String(error);
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
             outputChannel.appendLine(
                 `[Error] Failed to fetch batch "${batchName}": ${message}`,
             );

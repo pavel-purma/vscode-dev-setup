@@ -3,6 +3,7 @@ import { SecretMap } from '../config/configTypes';
 
 const DOPPLER_API_BASE = 'https://api.doppler.com/v3';
 const SECRET_KEY = 'dev-setup.dopplerToken';
+const FETCH_TIMEOUT_MS = 30_000;
 
 export interface DopplerTokenInfo {
     name: string;
@@ -21,21 +22,31 @@ export interface DopplerTokenInfo {
  * Returns token info if valid, throws on failure.
  */
 export async function validateToken(token: string): Promise<DopplerTokenInfo> {
-    const response = await fetch(`${DOPPLER_API_BASE}/me`, {
-        method: 'GET',
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Accept': 'application/json',
-        },
-    });
+    try {
+        const response = await fetch(`${DOPPLER_API_BASE}/me`, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Accept': 'application/json',
+            },
+            signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        });
 
-    if (!response.ok) {
-        const body = await response.text();
-        throw new Error(`Doppler API error (${response.status}): ${body}`);
+        if (!response.ok) {
+            const body = await response.text();
+            throw new Error(`Doppler API error (${response.status}): ${body}`);
+        }
+
+        const data = await response.json() as any;
+        return data as DopplerTokenInfo;
+    } catch (err) {
+        // AbortSignal.timeout() throws TimeoutError; AbortError covers manual abort scenarios
+        if (err instanceof DOMException && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+            vscode.window.showErrorMessage('Dev Setup: Request timed out while validating Doppler token.');
+            throw new Error('Request timed out while validating Doppler token.');
+        }
+        throw err;
     }
-
-    const data = await response.json() as any;
-    return data as DopplerTokenInfo;
 }
 
 /**
@@ -68,32 +79,42 @@ export async function fetchSecrets(token: string, project: string, config: strin
     url.searchParams.set('project', project);
     url.searchParams.set('config', config);
 
-    const response = await fetch(url.toString(), {
-        method: 'GET',
-        headers: {
-            'Authorization': `Bearer ${token}`,
-            'Accept': 'application/json',
-        },
-    });
+    try {
+        const response = await fetch(url.toString(), {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Accept': 'application/json',
+            },
+            signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        });
 
-    if (!response.ok) {
-        const body = await response.text();
-        throw new Error(`Doppler API error (${response.status}) fetching secrets for project "${project}", config "${config}": ${body}`);
-    }
-
-    const data = await response.json() as any;
-
-    if (!data.secrets || typeof data.secrets !== 'object') {
-        throw new Error(`Doppler API returned unexpected response format for project "${project}", config "${config}"`);
-    }
-
-    const result: SecretMap = {};
-    for (const [key, value] of Object.entries(data.secrets)) {
-        const secret = value as { raw?: string; computed?: string };
-        if (secret.computed !== undefined) {
-            result[key] = secret.computed;
+        if (!response.ok) {
+            const body = await response.text();
+            throw new Error(`Doppler API error (${response.status}) fetching secrets for project "${project}", config "${config}": ${body}`);
         }
-    }
 
-    return result;
+        const data = await response.json() as any;
+
+        if (!data.secrets || typeof data.secrets !== 'object') {
+            throw new Error(`Doppler API returned unexpected response format for project "${project}", config "${config}"`);
+        }
+
+        const result: SecretMap = {};
+        for (const [key, value] of Object.entries(data.secrets)) {
+            const secret = value as { raw?: string; computed?: string };
+            if (secret.computed !== undefined) {
+                result[key] = secret.computed;
+            }
+        }
+
+        return result;
+    } catch (err) {
+        // AbortSignal.timeout() throws TimeoutError; AbortError covers manual abort scenarios
+        if (err instanceof DOMException && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+            vscode.window.showErrorMessage(`Dev Setup: Request timed out fetching secrets for project "${project}", config "${config}".`);
+            throw new Error(`Request timed out fetching secrets for project "${project}", config "${config}".`);
+        }
+        throw err;
+    }
 }

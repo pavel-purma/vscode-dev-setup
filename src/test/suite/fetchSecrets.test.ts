@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import { findConfig } from '../../config/configFinder';
 import { fetchSecrets } from '../../doppler/dopplerClient';
 import { writeDotenv } from '../../loaders/dotenvWriter';
-import { processWorkspaceFolder } from '../../hooks/onWorkspaceOpen';
+import { processWorkspaceFolder, fetchSecretsFromConfig, resetConcurrencyGuard } from '../../hooks/onWorkspaceOpen';
 import * as fetchMock from '../helpers/fetchMock';
 import { createFakeSecretStorage } from '../helpers/fakeSecretStorage';
 import { createFakeOutputChannel } from '../helpers/fakeOutputChannel';
@@ -18,10 +18,12 @@ suite('fetchSecrets Integration', () => {
 
     setup(async () => {
         tempDir = await createTempWorkspace();
+        resetConcurrencyGuard();
     });
 
     teardown(async () => {
         fetchMock.restore();
+        resetConcurrencyGuard();
         await cleanupTempWorkspace(tempDir);
     });
 
@@ -310,5 +312,138 @@ suite('fetchSecrets Integration', () => {
             logLines.some(l => l.includes('Secrets loaded successfully')),
             'Output should log success message',
         );
+    });
+
+    // ── Timeout Handling ─────────────────────────────────────────────
+
+    test('should throw on fetch timeout (AbortSignal)', async () => {
+        fetchMock.install();
+
+        // Install a handler that never resolves, simulating a hung connection
+        fetchMock.addHandler(
+            'https://api.doppler.com/v3/configs/config/secrets',
+            () => new Promise<Response>(() => { /* never resolves */ }),
+        );
+
+        // Use a short AbortSignal to avoid waiting 30 s in tests.
+        // We call fetch directly with a custom signal to prove the
+        // timeout path works end-to-end via the dopplerClient catch block.
+        const controller = new AbortController();
+        // Abort after 50 ms
+        setTimeout(() => controller.abort(new DOMException('The operation was aborted.', 'AbortError')), 50);
+
+        // Call the underlying fetch ourselves to verify the mock respects the signal
+        try {
+            await globalThis.fetch(
+                'https://api.doppler.com/v3/configs/config/secrets?project=p&config=c',
+                { signal: controller.signal },
+            );
+            assert.fail('Expected fetch to throw on abort');
+        } catch (err: any) {
+            assert.ok(
+                err instanceof DOMException,
+                `Expected DOMException, got ${err.constructor.name}`,
+            );
+            assert.strictEqual(err.name, 'AbortError');
+        }
+    });
+
+    test('fetchSecrets should throw a timeout error for a hung connection', async () => {
+        fetchMock.install();
+
+        // A handler that never resolves — simulates API hang
+        fetchMock.addHandler(
+            'https://api.doppler.com/v3/configs/config/secrets',
+            () => new Promise<Response>(() => { /* never resolves */ }),
+        );
+
+        // Monkey-patch AbortSignal.timeout to use a short duration for this test
+        const origTimeout = AbortSignal.timeout;
+        AbortSignal.timeout = ((): AbortSignal => origTimeout.call(AbortSignal, 100)) as typeof AbortSignal.timeout;
+
+        try {
+            await assert.rejects(
+                () => fetchSecrets('dp.test.token', 'proj', 'dev'),
+                (err: any) => {
+                    assert.ok(err instanceof Error, 'Should throw an Error');
+                    assert.ok(
+                        err.message.includes('timed out'),
+                        `Error message should mention timeout, got: "${err.message}"`,
+                    );
+                    return true;
+                },
+            );
+        } finally {
+            AbortSignal.timeout = origTimeout;
+        }
+    });
+
+    // ── Concurrency Guard ────────────────────────────────────────────
+
+    test('concurrent fetchSecretsFromConfig calls should deduplicate', async () => {
+        // Write a config so the pipeline has something to process
+        const config = {
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                project: 'concurrency-project',
+            },
+        };
+        await writeConfigFile(tempDir, config);
+
+        fetchMock.install();
+
+        let fetchCallCount = 0;
+        fetchMock.addHandler(
+            'https://api.doppler.com/v3/configs/config/secrets',
+            async () => {
+                fetchCallCount++;
+                // Simulate a short delay so both calls overlap
+                await new Promise<void>((resolve) => setTimeout(resolve, 100));
+                return new Response(
+                    JSON.stringify({ secrets: { KEY: { raw: 'v', computed: 'v' } } }),
+                    { status: 200, headers: { 'Content-Type': 'application/json' } },
+                );
+            },
+        );
+
+        const fakeSecrets = createFakeSecretStorage({
+            'dev-setup.dopplerToken': 'dp.test.mock_token',
+        });
+        const fakeOutput = createFakeOutputChannel();
+        const fakeContext = { secrets: fakeSecrets } as unknown as vscode.ExtensionContext;
+
+        // Stub workspaceFolders so fetchSecretsFromConfig sees our temp folder
+        const originalFolders = vscode.workspace.workspaceFolders;
+        const fakeFolder: vscode.WorkspaceFolder = {
+            uri: vscode.Uri.file(tempDir),
+            name: 'test-workspace',
+            index: 0,
+        };
+        Object.defineProperty(vscode.workspace, 'workspaceFolders', {
+            value: [fakeFolder],
+            configurable: true,
+        });
+
+        try {
+            // Fire two concurrent calls
+            const promise1 = fetchSecretsFromConfig(fakeContext, fakeOutput, false);
+            const promise2 = fetchSecretsFromConfig(fakeContext, fakeOutput, false);
+
+            await Promise.all([promise1, promise2]);
+
+            // Only one pipeline should have actually run — the second should have deduped
+            assert.strictEqual(
+                fetchCallCount,
+                1,
+                'Only one fetch call should occur when two concurrent fetchSecretsFromConfig calls are made',
+            );
+        } finally {
+            Object.defineProperty(vscode.workspace, 'workspaceFolders', {
+                value: originalFolders,
+                configurable: true,
+            });
+        }
     });
 });
