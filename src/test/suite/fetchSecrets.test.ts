@@ -265,7 +265,7 @@ suite('fetchSecrets Integration', () => {
         const yamlContent = [
             'secrets:',
             '  provider: doppler',
-            // missing 'loader' field
+            // missing 'loader' and 'script' fields
             '  batches:',
             '    - dev',
         ].join('\n');
@@ -278,8 +278,8 @@ suite('fetchSecrets Integration', () => {
             (err: unknown) => {
                 assert.ok(err instanceof Error);
                 assert.ok(
-                    err.message.includes("'secrets.loader'"),
-                    `Error should mention secrets.loader, got: "${err.message}"`,
+                    err.message.includes("'secrets' must define at least one of 'loader' or 'script'"),
+                    `Error should mention at least one of loader or script, got: "${err.message}"`,
                 );
                 return true;
             },
@@ -1650,12 +1650,12 @@ suite('fetchSecrets Integration', () => {
 
             // 6. Verify the success notification was shown
             assert.ok(
-                infoCalls.some(m => m.includes('Dev Setup: Secrets loaded successfully')),
+                infoCalls.some(m => m.includes('Dev Setup: Secrets fetched and written to')),
                 'Should show success info notification in manual mode',
             );
             assert.ok(
-                infoCalls.some(m => m.includes("project 'notify-project'")),
-                'Notification should contain the project name',
+                infoCalls.some(m => m.includes('.env')),
+                'Notification should mention .env file path',
             );
         } finally {
             (vscode.window as any).showInformationMessage = originalShowInfo;
@@ -1828,5 +1828,390 @@ suite('fetchSecrets Integration', () => {
         } finally {
             (vscode.window as any).showInformationMessage = originalShowInfo;
         }
+    });
+
+    // ── Config Validation: loader/script optionality ─────────────────
+
+    test('loader optional when script is defined', () => {
+        const jsonContent = JSON.stringify({
+            secrets: {
+                provider: 'doppler',
+                script: 'npm start',
+                batches: ['dev'],
+            },
+        });
+
+        const fakeOutput = createFakeOutputChannel();
+        const raw = new TextEncoder().encode(jsonContent);
+        const config = parseJsonConfig(raw, fakeOutput);
+
+        assert.strictEqual(config.secrets?.script, 'npm start');
+        assert.strictEqual(config.secrets?.loader, undefined);
+    });
+
+    test('both loader and script defined parses successfully', () => {
+        const jsonContent = JSON.stringify({
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                script: 'npm start',
+                batches: ['dev'],
+            },
+        });
+
+        const fakeOutput = createFakeOutputChannel();
+        const raw = new TextEncoder().encode(jsonContent);
+        const config = parseJsonConfig(raw, fakeOutput);
+
+        assert.strictEqual(config.secrets?.loader, 'dotenv');
+        assert.strictEqual(config.secrets?.script, 'npm start');
+    });
+
+    test('neither loader nor script rejects', () => {
+        const jsonContent = JSON.stringify({
+            secrets: {
+                provider: 'doppler',
+                batches: ['dev'],
+            },
+        });
+
+        const fakeOutput = createFakeOutputChannel();
+        const raw = new TextEncoder().encode(jsonContent);
+
+        assert.throws(
+            () => parseJsonConfig(raw, fakeOutput),
+            (err: unknown) => {
+                assert.ok(err instanceof Error);
+                assert.ok(
+                    err.message.includes("at least one of 'loader' or 'script'"),
+                    `Error should mention at least one of loader or script, got: "${err.message}"`,
+                );
+                return true;
+            },
+        );
+    });
+
+    test('empty string script rejects', () => {
+        const jsonContent = JSON.stringify({
+            secrets: {
+                provider: 'doppler',
+                script: '',
+                batches: ['dev'],
+            },
+        });
+
+        const fakeOutput = createFakeOutputChannel();
+        const raw = new TextEncoder().encode(jsonContent);
+
+        assert.throws(
+            () => parseJsonConfig(raw, fakeOutput),
+            (err: unknown) => {
+                assert.ok(err instanceof Error);
+                assert.ok(
+                    err.message.includes("'secrets.script' must be a non-empty string"),
+                    `Error should mention non-empty string, got: "${err.message}"`,
+                );
+                return true;
+            },
+        );
+    });
+
+    test('non-string script rejects', () => {
+        const jsonContent = JSON.stringify({
+            secrets: {
+                provider: 'doppler',
+                script: 123,
+                batches: ['dev'],
+            },
+        });
+
+        const fakeOutput = createFakeOutputChannel();
+        const raw = new TextEncoder().encode(jsonContent);
+
+        assert.throws(
+            () => parseJsonConfig(raw, fakeOutput),
+            (err: unknown) => {
+                assert.ok(err instanceof Error);
+                assert.ok(
+                    err.message.includes("'secrets.script' must be a non-empty string"),
+                    `Error should mention non-empty string, got: "${err.message}"`,
+                );
+                return true;
+            },
+        );
+    });
+
+    // ── Script Pipeline Integration Tests ────────────────────────────
+
+    suite('script pipeline integration', () => {
+        let terminalOptions: any[];
+        let sentTexts: string[];
+        let showCalls: number;
+        let origCreateTerminal: typeof vscode.window.createTerminal;
+
+        const fakeTerminal: vscode.Terminal = {
+            show: () => { showCalls++; },
+            sendText: (text: string) => { sentTexts.push(text); },
+            name: 'fake',
+            processId: Promise.resolve(undefined),
+            creationOptions: {},
+            exitStatus: undefined,
+            state: { isInteractedWith: false, shell: undefined },
+            dispose: () => {},
+            hide: () => {},
+            shellIntegration: undefined,
+        };
+
+        setup(() => {
+            terminalOptions = [];
+            sentTexts = [];
+            showCalls = 0;
+            origCreateTerminal = vscode.window.createTerminal;
+            (vscode.window as any).createTerminal = (opts: any) => {
+                terminalOptions.push(opts);
+                return fakeTerminal;
+            };
+        });
+
+        teardown(() => {
+            (vscode.window as any).createTerminal = origCreateTerminal;
+        });
+
+        test('script-only pipeline: fetches secrets and runs script, no .env written', async () => {
+            // 1. Write config with script only (no loader)
+            const config = {
+                secrets: {
+                    provider: 'doppler',
+                    script: 'npm start',
+                    batches: ['dev'],
+                    project: 'script-only-project',
+                },
+            };
+            await writeConfigFile(tempDir, config);
+
+            // 2. Install fetch mock
+            fetchMock.install();
+            const mockSecrets = {
+                secrets: {
+                    DB_HOST: { raw: 'ref', computed: 'localhost' },
+                    API_KEY: { raw: 'ref', computed: 'sk-12345' },
+                },
+            };
+            fetchMock.addResponse(
+                'https://api.doppler.com/v3/configs/config/secrets',
+                { status: 200, body: JSON.stringify(mockSecrets) },
+            );
+
+            // 3. Set up fakes
+            const fakeSecrets = createFakeSecretStorage({
+                'dev-setup.dopplerToken': 'dp.test.mock_token',
+            });
+            const fakeOutput = createFakeOutputChannel();
+            const fakeContext = {
+                secrets: fakeSecrets,
+            } as unknown as vscode.ExtensionContext;
+            const fakeFolder: vscode.WorkspaceFolder = {
+                uri: vscode.Uri.file(tempDir),
+                name: 'script-only-test',
+                index: 0,
+            };
+
+            // 4. Run the pipeline
+            await processWorkspaceFolder(fakeFolder, fakeContext, fakeOutput, false);
+
+            // 5. Verify createTerminal was called with correct env vars
+            assert.strictEqual(terminalOptions.length, 1, 'createTerminal should be called once');
+            assert.deepStrictEqual(terminalOptions[0].env, {
+                DB_HOST: 'localhost',
+                API_KEY: 'sk-12345',
+            });
+
+            // 6. Verify .env file does NOT exist
+            const envUri = vscode.Uri.joinPath(vscode.Uri.file(tempDir), '.env');
+            try {
+                await vscode.workspace.fs.readFile(envUri);
+                assert.fail('.env file should not exist in script-only mode');
+            } catch {
+                // Expected: file does not exist
+            }
+        });
+
+        test('loader+script pipeline: writes .env AND runs script', async () => {
+            // 1. Write config with both loader and script
+            const config = {
+                secrets: {
+                    provider: 'doppler',
+                    loader: 'dotenv',
+                    script: 'npm start',
+                    batches: ['dev'],
+                    project: 'both-project',
+                },
+            };
+            await writeConfigFile(tempDir, config);
+
+            // 2. Install fetch mock
+            fetchMock.install();
+            const mockSecrets = {
+                secrets: {
+                    DB_HOST: { raw: 'ref', computed: 'localhost' },
+                },
+            };
+            fetchMock.addResponse(
+                'https://api.doppler.com/v3/configs/config/secrets',
+                { status: 200, body: JSON.stringify(mockSecrets) },
+            );
+
+            // 3. Set up fakes
+            const fakeSecrets = createFakeSecretStorage({
+                'dev-setup.dopplerToken': 'dp.test.mock_token',
+            });
+            const fakeOutput = createFakeOutputChannel();
+            const fakeContext = {
+                secrets: fakeSecrets,
+            } as unknown as vscode.ExtensionContext;
+            const fakeFolder: vscode.WorkspaceFolder = {
+                uri: vscode.Uri.file(tempDir),
+                name: 'both-test',
+                index: 0,
+            };
+
+            // 4. Run the pipeline
+            await processWorkspaceFolder(fakeFolder, fakeContext, fakeOutput, false);
+
+            // 5. Verify .env file exists
+            const envUri = vscode.Uri.joinPath(vscode.Uri.file(tempDir), '.env');
+            const envContent = new TextDecoder().decode(
+                await vscode.workspace.fs.readFile(envUri),
+            );
+            assert.ok(envContent.includes('DB_HOST=localhost'), '.env should contain secrets');
+
+            // 6. Verify createTerminal was called
+            assert.strictEqual(terminalOptions.length, 1, 'createTerminal should be called once');
+        });
+
+        test('script-only success message (manual mode)', async () => {
+            // 1. Write config with script only
+            const config = {
+                secrets: {
+                    provider: 'doppler',
+                    script: 'npm start',
+                    batches: ['dev'],
+                    project: 'script-notify-project',
+                },
+            };
+            await writeConfigFile(tempDir, config);
+
+            // 2. Install fetch mock
+            fetchMock.install();
+            const mockSecrets = {
+                secrets: {
+                    DB_HOST: { raw: 'ref', computed: 'localhost' },
+                },
+            };
+            fetchMock.addResponse(
+                'https://api.doppler.com/v3/configs/config/secrets',
+                { status: 200, body: JSON.stringify(mockSecrets) },
+            );
+
+            // 3. Set up fakes
+            const fakeSecrets = createFakeSecretStorage({
+                'dev-setup.dopplerToken': 'dp.test.mock_token',
+            });
+            const fakeOutput = createFakeOutputChannel();
+            const fakeContext = {
+                secrets: fakeSecrets,
+            } as unknown as vscode.ExtensionContext;
+            const fakeFolder: vscode.WorkspaceFolder = {
+                uri: vscode.Uri.file(tempDir),
+                name: 'script-notify-test',
+                index: 0,
+            };
+
+            // 4. Spy on showInformationMessage
+            const originalShowInfo = vscode.window.showInformationMessage;
+            const infoCalls: string[] = [];
+            (vscode.window as any).showInformationMessage = (...args: any[]) => {
+                infoCalls.push(args[0]);
+                return Promise.resolve(undefined);
+            };
+
+            try {
+                // 5. Run the pipeline with manual: true
+                await processWorkspaceFolder(fakeFolder, fakeContext, fakeOutput, true);
+
+                // 6. Verify success message mentions script started
+                assert.ok(
+                    infoCalls.some(m => m.includes('script started')),
+                    `Should show success notification mentioning script started, got: ${JSON.stringify(infoCalls)}`,
+                );
+            } finally {
+                (vscode.window as any).showInformationMessage = originalShowInfo;
+            }
+        });
+
+        test('loader+script success message (manual mode)', async () => {
+            // 1. Write config with both loader and script
+            const config = {
+                secrets: {
+                    provider: 'doppler',
+                    loader: 'dotenv',
+                    script: 'npm start',
+                    batches: ['dev'],
+                    project: 'both-notify-project',
+                },
+            };
+            await writeConfigFile(tempDir, config);
+
+            // 2. Install fetch mock
+            fetchMock.install();
+            const mockSecrets = {
+                secrets: {
+                    DB_HOST: { raw: 'ref', computed: 'localhost' },
+                },
+            };
+            fetchMock.addResponse(
+                'https://api.doppler.com/v3/configs/config/secrets',
+                { status: 200, body: JSON.stringify(mockSecrets) },
+            );
+
+            // 3. Set up fakes
+            const fakeSecrets = createFakeSecretStorage({
+                'dev-setup.dopplerToken': 'dp.test.mock_token',
+            });
+            const fakeOutput = createFakeOutputChannel();
+            const fakeContext = {
+                secrets: fakeSecrets,
+            } as unknown as vscode.ExtensionContext;
+            const fakeFolder: vscode.WorkspaceFolder = {
+                uri: vscode.Uri.file(tempDir),
+                name: 'both-notify-test',
+                index: 0,
+            };
+
+            // 4. Spy on showInformationMessage
+            const originalShowInfo = vscode.window.showInformationMessage;
+            const infoCalls: string[] = [];
+            (vscode.window as any).showInformationMessage = (...args: any[]) => {
+                infoCalls.push(args[0]);
+                return Promise.resolve(undefined);
+            };
+
+            try {
+                // 5. Run the pipeline with manual: true
+                await processWorkspaceFolder(fakeFolder, fakeContext, fakeOutput, true);
+
+                // 6. Verify success message mentions both written to and script started
+                assert.ok(
+                    infoCalls.some(m => m.includes('written to')),
+                    `Should mention written to in notification, got: ${JSON.stringify(infoCalls)}`,
+                );
+                assert.ok(
+                    infoCalls.some(m => m.includes('script started')),
+                    `Should mention script started in notification, got: ${JSON.stringify(infoCalls)}`,
+                );
+            } finally {
+                (vscode.window as any).showInformationMessage = originalShowInfo;
+            }
+        });
     });
 });

@@ -21,8 +21,26 @@ function validateConfig(parsed: unknown, outputChannel: vscode.OutputChannel): D
             throw new Error("Invalid dev-setup config: 'secrets.provider' must be a non-empty string");
         }
 
-        if (typeof sec.loader !== 'string' || sec.loader.length === 0) {
-            throw new Error("Invalid dev-setup config: 'secrets.loader' must be a non-empty string");
+        if (sec.loader !== undefined) {
+            if (typeof sec.loader !== 'string' || sec.loader.length === 0) {
+                throw new Error(
+                    "Invalid dev-setup config: 'secrets.loader' must be a non-empty string if provided",
+                );
+            }
+        }
+
+        if (sec.script !== undefined) {
+            if (typeof sec.script !== 'string' || sec.script.length === 0) {
+                throw new Error(
+                    "Invalid dev-setup config: 'secrets.script' must be a non-empty string if provided",
+                );
+            }
+        }
+
+        if (sec.loader === undefined && sec.script === undefined) {
+            throw new Error(
+                "Invalid dev-setup config: 'secrets' must define at least one of 'loader' or 'script'",
+            );
         }
 
         if (!Array.isArray(sec.batches) || sec.batches.length === 0) {
@@ -82,8 +100,15 @@ function validateConfig(parsed: unknown, outputChannel: vscode.OutputChannel): D
 
     if (result.secrets) {
         const batchCount = result.secrets.batches?.length ?? 0;
+        const parts: string[] = [`provider "${result.secrets.provider}"`];
+        if (result.secrets.loader) {
+            parts.push(`loader "${result.secrets.loader}"`);
+        }
+        if (result.secrets.script) {
+            parts.push(`script "${result.secrets.script}"`);
+        }
         outputChannel.appendLine(
-            `Dev Setup: Config contains secrets section with provider "${result.secrets.provider}", loader "${result.secrets.loader}", ${batchCount} batch(es)`,
+            `Dev Setup: Config contains secrets section with ${parts.join(', ')}, ${batchCount} batch(es)`,
         );
     }
 

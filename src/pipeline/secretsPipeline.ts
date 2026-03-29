@@ -3,6 +3,7 @@ import { findConfig } from '../config/configFinder';
 import { BatchedSecretEntry, SecretFilter, SecretMap } from '../config/configTypes';
 import { fetchSecrets, getStoredToken } from '../doppler/dopplerClient';
 import { writeDotenv } from '../loaders/dotenvWriter';
+import { runScript } from '../runners/scriptRunner';
 import { parseBatchEntry } from './batchParser';
 
 /**
@@ -137,7 +138,7 @@ export async function processWorkspaceFolder(
         return;
     }
 
-    const { provider, loader, batches, project: configProject } = config.secrets;
+    const { provider, loader, script, batches, project: configProject } = config.secrets;
 
     // 3. Validate provider
     if (provider !== 'doppler') {
@@ -147,15 +148,27 @@ export async function processWorkspaceFolder(
         return;
     }
 
-    // 4. Validate loader
-    if (loader !== 'dotenv') {
-        outputChannel.appendLine(
-            `Unsupported secrets loader: ${loader}. Only 'dotenv' is supported.`,
-        );
+    // 4. Defense-in-depth: ensure at least one of loader or script is configured
+    if (!loader && !script) {
+        const msg = 'Dev Setup: No loader or script configured for secrets';
+        outputChannel.appendLine(msg);
+        if (manual) {
+            vscode.window.showErrorMessage(msg);
+        }
         return;
     }
 
-    // 5. Retrieve Doppler token
+    // 5. Validate loader (when defined)
+    if (loader !== undefined && loader !== 'dotenv') {
+        const loaderMsg = `Unsupported secrets loader: ${loader}. Only 'dotenv' is supported.`;
+        outputChannel.appendLine(loaderMsg);
+        if (manual) {
+            vscode.window.showErrorMessage(`Dev Setup: ${loaderMsg}`);
+        }
+        return;
+    }
+
+    // 6. Retrieve Doppler token
     outputChannel.appendLine('Dev Setup: Retrieving stored Doppler token...');
     const token = await getStoredToken(context.secrets);
     if (!token) {
@@ -172,10 +185,10 @@ export async function processWorkspaceFolder(
 
     outputChannel.appendLine('Dev Setup: Doppler token found');
 
-    // 6. Determine default project name
+    // 7. Determine default project name
     const defaultProject = configProject || folder.name;
 
-    // 7. Fetch secrets from each batch and merge
+    // 8. Fetch secrets from each batch and merge
     outputChannel.appendLine(`Dev Setup: Processing ${batches.length} secret batch(es): ${batches.join(', ')}`);
     const batchedResults: BatchedSecretEntry[] = [];
 
@@ -227,27 +240,47 @@ export async function processWorkspaceFolder(
     outputChannel.appendLine(`Dev Setup: Merged ${uniqueKeyCount} total secrets from ${batches.length} batch(es)`);
 
     if (uniqueKeyCount === 0) {
-        outputChannel.appendLine('No secrets fetched — skipping .env write.');
+        outputChannel.appendLine('No secrets fetched — skipping output.');
         return;
     }
 
-    // 8. Write .env file
-    try {
-        await writeDotenv(configDir, batchedResults, outputChannel);
-    } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-        outputChannel.appendLine(`[Error] Failed to write .env file: ${message}`);
-        vscode.window.showErrorMessage(`Dev Setup: Failed to write .env file — ${message}`);
-        return;
-    }
+    // 9. Write .env file (only when loader is configured)
+    if (loader) {
+        try {
+            await writeDotenv(configDir, batchedResults, outputChannel);
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+            outputChannel.appendLine(`[Error] Failed to write .env file: ${message}`);
+            if (manual) {
+                vscode.window.showErrorMessage(`Dev Setup: Failed to write .env file — ${message}`);
+            }
+            return;
+        }
 
-    outputChannel.appendLine(
-        `Secrets loaded successfully from Doppler for project '${defaultProject}' into ${configDir}/.env`,
-    );
-
-    if (manual) {
-        vscode.window.showInformationMessage(
-            `Dev Setup: Secrets loaded successfully for project '${defaultProject}' into .env`,
+        outputChannel.appendLine(
+            `Secrets loaded successfully from Doppler for project '${defaultProject}' into ${configDir}/.env`,
         );
+    }
+
+    // 10. Run script (when configured)
+    if (script) {
+        runScript(script, configDir, batchedResults, outputChannel);
+    }
+
+    // 11. Show success message
+    if (manual) {
+        if (loader && script) {
+            vscode.window.showInformationMessage(
+                `Dev Setup: Secrets fetched, written to ${configDir}/.env, and script started`,
+            );
+        } else if (loader) {
+            vscode.window.showInformationMessage(
+                `Dev Setup: Secrets fetched and written to ${configDir}/.env`,
+            );
+        } else {
+            vscode.window.showInformationMessage(
+                'Dev Setup: Secrets fetched and script started',
+            );
+        }
     }
 }

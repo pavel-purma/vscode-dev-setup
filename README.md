@@ -1,11 +1,11 @@
 # Dev Setup — VS Code Extension
 
-**Dev Setup** is a VS Code extension that automatically fetches development-time secrets from [Doppler](https://www.doppler.com/) and writes them into `.env` files. It keeps sensitive credentials out of your repository while making them instantly available when you open a project.
+**Dev Setup** is a VS Code extension that automatically fetches development-time secrets from [Doppler](https://www.doppler.com/) and makes them available to your development workflow. It can write secrets to `.env` files, launch scripts with secrets injected as environment variables, or both. It keeps sensitive credentials out of your repository while making them instantly available when you open a project.
 
 ## How It Works
 
 1. You place a **configuration file** in your repository (or workspace folder).
-2. When VS Code opens the workspace, the extension detects the config, fetches secrets from Doppler, and writes them to a `.env` file next to the config.
+2. When VS Code opens the workspace, the extension detects the config, fetches secrets from Doppler, and delivers them based on your configuration — writing a `.env` file, running a script with secrets as environment variables, or both.
 3. You can also trigger the fetch manually at any time via the Command Palette.
 
 The extension supports **multi-root workspaces** — each workspace folder is processed independently based on its own configuration file.
@@ -65,11 +65,12 @@ Both **YAML** and **JSON** formats are supported. YAML takes priority over JSON 
 secrets:
   provider: doppler
   loader: dotenv
-  project: my-doppler-project    # optional
+  script: npm run dev              # optional
+  project: my-doppler-project      # optional
   batches:
     - dev
     - staging
-  filter:                        # optional
+  filter:                          # optional
     include:
       - "^DB_"
     exclude:
@@ -83,6 +84,7 @@ secrets:
   "secrets": {
     "provider": "doppler",
     "loader": "dotenv",
+    "script": "npm run dev",
     "project": "my-doppler-project",
     "batches": ["dev", "staging"],
     "filter": {
@@ -98,10 +100,52 @@ secrets:
 | Field              | Required | Description |
 |--------------------|----------|-------------|
 | `secrets.provider` | Yes      | The secrets provider. Currently only `doppler` is supported. |
-| `secrets.loader`   | Yes      | How secrets are written locally. Currently only `dotenv` is supported (writes a `.env` file). |
+| `secrets.loader`   | No*      | How secrets are written locally. Currently only `dotenv` is supported (writes a `.env` file). |
+| `secrets.script`   | No*      | A shell command to run in a new VS Code integrated terminal with all fetched secrets injected as environment variables. The terminal's working directory is set to the config file's directory. |
 | `secrets.project`  | No       | The Doppler project name. If omitted, the **workspace folder name** is used as the default project name. |
 | `secrets.batches`  | Yes      | A list of Doppler configs (environments) to fetch. See [Batch Format](#batch-format). |
 | `secrets.filter`   | No       | An object with optional `include` and `exclude` sub-arrays of regex patterns. See [Filtering Secrets](#filtering-secrets). |
+
+> **\*** At least one of `loader` or `script` must be provided. You can use both together — when you do, the loader runs first (e.g., writes the `.env` file), then the script runs in a new terminal.
+
+### Usage Examples
+
+#### Loader Only — Write a `.env` File
+
+The simplest setup: fetch secrets and write them to a `.env` file. Your application reads secrets from the file.
+
+```yaml
+secrets:
+  provider: doppler
+  loader: dotenv
+  batches:
+    - dev
+```
+
+#### Script Only — Run a Dev Server with Secrets
+
+No `.env` file is created. Instead, a new VS Code integrated terminal opens with all fetched secrets set as environment variables, then runs the specified command. This is useful when your tooling reads secrets directly from the environment.
+
+```yaml
+secrets:
+  provider: doppler
+  script: npm run dev
+  batches:
+    - dev
+```
+
+#### Loader and Script — Write `.env` and Run a Script
+
+Combines both approaches: the `.env` file is written first, then the script runs in a terminal with secrets as environment variables. This is handy when you want a persistent `.env` file **and** need to launch a process that uses the secrets.
+
+```yaml
+secrets:
+  provider: doppler
+  loader: dotenv
+  script: docker compose up
+  batches:
+    - dev
+```
 
 ## Batch Format
 
@@ -138,11 +182,11 @@ For example:
 
 ### Merging Behaviour
 
-Secrets from all batches are **merged** into a single `.env` file. If multiple batches define the same secret key, the **first batch** in the list wins — later duplicates are commented out.
+Secrets from all batches are **merged** into a single set. If multiple batches define the same secret key, the **first batch** in the list wins. When using the `dotenv` loader, later duplicates are commented out in the `.env` file.
 
 ## Filtering Secrets
 
-The optional `filter` field lets you limit which secrets are written to the `.env` file. It is an object with two optional sub-arrays:
+The optional `filter` field lets you limit which secrets are delivered to your workflow (written to a `.env` file and/or injected into a script terminal). It is an object with two optional sub-arrays:
 
 | Sub-field | Description |
 |-----------|-------------|
@@ -184,7 +228,9 @@ Secrets that are filtered out are logged to the **Dev Setup** output channel for
 
 ## Output
 
-The `.env` file is written in the **same directory** as the configuration file. Secret keys are sorted alphabetically and values are quoted when they contain spaces, special characters, or are empty.
+### `.env` File (Loader)
+
+When `loader` is configured, the `.env` file is written in the **same directory** as the configuration file. Secret keys are sorted alphabetically and values are quoted when they contain spaces, special characters, or are empty.
 
 Example output (`.env`):
 
@@ -195,6 +241,12 @@ SECRET_WITH_SPACES="hello world"
 ```
 
 > **Tip:** Add `.env` to your `.gitignore` to avoid committing secrets.
+
+### Script Terminal
+
+When `script` is configured, a new VS Code integrated terminal is created with the name **Dev Setup**. All fetched secrets are set as environment variables in that terminal, and the specified command is executed automatically. The terminal's working directory is the directory containing the configuration file.
+
+If `loader` is also configured, the `.env` file is written **before** the script terminal is opened.
 
 ## Multi-Root Workspaces
 

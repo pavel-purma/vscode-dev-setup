@@ -8,7 +8,10 @@ export interface SecretFilter {
 
 export interface SecretsConfig {
     provider: string;
-    loader: string;
+    /** Loader to use for writing secrets (e.g. 'dotenv'). Optional if `script` is defined. */
+    loader?: string;
+    /** Shell command to run in a VS Code terminal with secrets injected as env vars. */
+    script?: string;
     batches: string[];
     project?: string;
     /** Optional filter object with include/exclude regex patterns for secret keys. */
