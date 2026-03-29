@@ -1,7 +1,7 @@
 {
   "name": "dev-setup",
   "displayName": "Dev Setup",
-  "description": "Fetch Doppler secrets and inject them into .env files or terminal sessions for local development",
+  "description": "Fetch secrets from Doppler or Infisical and inject them into .env files or terminal sessions for local development",
   "version": "0.0.1",
   "publisher": "pavel-purma",
   "author": "Pavel Purma <pavel@purma.cz> (https://github.com/pavel-purma)",
@@ -23,6 +23,10 @@
       {
         "command": "dev-setup.loginToDoppler",
         "title": "Dev Setup: Login to Doppler"
+      },
+      {
+        "command": "dev-setup.loginToInfisical",
+        "title": "Dev Setup: Login to Infisical"
       },
       {
         "command": "dev-setup.fetchSecrets",

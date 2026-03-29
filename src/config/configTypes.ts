@@ -16,6 +16,14 @@ export interface SecretsConfig {
     project?: string;
     /** Optional filter object with include/exclude regex patterns for secret keys. */
     filter?: SecretFilter;
+    /**
+     * Provider-specific parameters. Each provider defines which keys it recognizes.
+     * Unknown keys are ignored.
+     *
+     * Doppler: (none currently)
+     * Infisical: { baseUrl?: string; secretPath?: string }
+     */
+    providerParams?: Record<string, unknown>;
 }
 
 export interface DevSetupConfig {

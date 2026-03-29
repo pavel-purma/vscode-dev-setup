@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import { findConfig } from '../config/configFinder';
 import { BatchedSecretEntry, SecretFilter, SecretMap } from '../config/configTypes';
-import { fetchSecrets, getStoredToken } from '../doppler/dopplerClient';
+import { createProvider } from '../providers/providerFactory';
+import { ProviderContext, SecretsProvider } from '../providers/providerTypes';
 import { writeDotenv } from '../loaders/dotenvWriter';
 import { runScript } from '../runners/scriptRunner';
 import { parseBatchEntry } from './batchParser';
@@ -140,11 +141,16 @@ export async function processWorkspaceFolder(
 
     const { provider, loader, script, batches, project: configProject } = config.secrets;
 
-    // 3. Validate provider
-    if (provider !== 'doppler') {
-        outputChannel.appendLine(
-            `Unsupported secrets provider: ${provider}. Only 'doppler' is supported.`,
-        );
+    // 3. Create provider via factory
+    let secretsProvider: SecretsProvider;
+    try {
+        secretsProvider = createProvider(provider);
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        outputChannel.appendLine(`Dev Setup: ${message}`);
+        if (manual) {
+            vscode.window.showErrorMessage(`Dev Setup: ${message}`);
+        }
         return;
     }
 
@@ -168,22 +174,24 @@ export async function processWorkspaceFolder(
         return;
     }
 
-    // 6. Retrieve Doppler token
-    outputChannel.appendLine('Dev Setup: Retrieving stored Doppler token...');
-    const token = await getStoredToken(context.secrets);
+    // 6. Retrieve token via provider
+    const ctx: ProviderContext = { secrets: context.secrets, outputChannel };
+    outputChannel.appendLine(`Dev Setup: Retrieving stored ${secretsProvider.displayName} token...`);
+    const token = await secretsProvider.getStoredToken(ctx);
     if (!token) {
-        outputChannel.appendLine('Dev Setup: No Doppler token found');
+        outputChannel.appendLine(`Dev Setup: No ${secretsProvider.displayName} token found`);
         if (manual) {
             vscode.window.showInformationMessage(
-                "Dev Setup: Doppler token not configured. Use 'Login to Doppler' command first.",
+                `Dev Setup: ${secretsProvider.displayName} token not configured. ` +
+                `Use 'Login to ${secretsProvider.displayName}' command first.`,
             );
         } else {
-            outputChannel.appendLine(`[${folder.name}] Doppler token not configured — skipping.`);
+            outputChannel.appendLine(`[${folder.name}] ${secretsProvider.displayName} token not configured — skipping.`);
         }
         return;
     }
 
-    outputChannel.appendLine('Dev Setup: Doppler token found');
+    outputChannel.appendLine(`Dev Setup: ${secretsProvider.displayName} token found`);
 
     // 7. Determine default project name
     const defaultProject = configProject || folder.name;
@@ -201,7 +209,9 @@ export async function processWorkspaceFolder(
             outputChannel.appendLine(
                 `Dev Setup: Fetching batch "${batchEntry}" for project "${project}"`,
             );
-            const batchSecrets = await fetchSecrets(token, project, batchConfig, outputChannel);
+            const batchSecrets = await secretsProvider.fetchSecrets(
+                token, project, batchConfig, ctx, config.secrets!.providerParams,
+            );
 
             // Apply secret key filter if configured
             let filteredSecrets = batchSecrets;
@@ -247,7 +257,7 @@ export async function processWorkspaceFolder(
     // 9. Write .env file (only when loader is configured)
     if (loader) {
         try {
-            await writeDotenv(configDir, batchedResults, outputChannel);
+            await writeDotenv(configDir, batchedResults, outputChannel, secretsProvider.displayName);
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
             outputChannel.appendLine(`[Error] Failed to write .env file: ${message}`);
@@ -258,7 +268,7 @@ export async function processWorkspaceFolder(
         }
 
         outputChannel.appendLine(
-            `Secrets loaded successfully from Doppler for project '${defaultProject}' into ${configDir}/.env`,
+            `Secrets loaded successfully from ${secretsProvider.displayName} for project '${defaultProject}' into ${configDir}/.env`,
         );
     }
 

@@ -10,12 +10,14 @@ import { BatchedSecretEntry } from '../config/configTypes';
  * @param directory - Absolute path of the directory to write the .env file in
  * @param batches - Ordered list of batched secret entries
  * @param outputChannel - Output channel for logging
+ * @param providerName - Human-readable provider name for comment headers (defaults to 'Doppler')
  * @returns The absolute path of the written .env file
  */
 export async function writeDotenv(
     directory: string,
     batches: BatchedSecretEntry[],
     outputChannel: vscode.OutputChannel,
+    providerName: string
 ): Promise<string> {
     const envUri = vscode.Uri.joinPath(vscode.Uri.file(directory), '.env');
 
@@ -25,7 +27,7 @@ export async function writeDotenv(
 
     for (const { batchName, secrets } of batches) {
         const sectionLines: string[] = [];
-        sectionLines.push(`# Doppler: ${batchName}`);
+        sectionLines.push(`# ${providerName}: ${batchName}`);
 
         const allKeys = Object.keys(secrets).sort();
         const duplicateKeys: string[] = [];

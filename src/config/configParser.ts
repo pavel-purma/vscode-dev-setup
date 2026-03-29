@@ -57,6 +57,12 @@ function validateConfig(parsed: unknown, outputChannel: vscode.OutputChannel): D
             throw new Error("Invalid dev-setup config: 'secrets.project' must be a non-empty string if provided");
         }
 
+        if (sec.providerParams !== undefined) {
+            if (typeof sec.providerParams !== 'object' || sec.providerParams === null || Array.isArray(sec.providerParams)) {
+                throw new Error("Invalid dev-setup config: 'secrets.providerParams' must be an object if provided");
+            }
+        }
+
         if (sec.filter !== undefined) {
             if (typeof sec.filter !== 'object' || sec.filter === null || Array.isArray(sec.filter)) {
                 throw new Error("Invalid dev-setup config: 'secrets.filter' must be an object if provided");
