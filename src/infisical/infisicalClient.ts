@@ -19,6 +19,18 @@ export interface InfisicalAccessToken {
     tokenType: string;
 }
 
+/** Workspace metadata returned by the Infisical API. */
+export interface InfisicalWorkspace {
+    id: string;
+    name: string;
+    slug: string;
+}
+
+/** Checks whether a string is a valid GUID (UUID v4 format). */
+export function isGuid(value: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
 /**
  * Parse stored credential JSON into an InfisicalCredentials object.
  * Throws if the JSON is malformed or missing required fields.
@@ -226,4 +238,78 @@ export async function fetchSecrets(
         }
         throw err;
     }
+}
+
+/**
+ * Fetches the list of workspaces from Infisical.
+ *
+ * @param accessToken - A valid Infisical access token
+ * @param siteUrl - The Infisical API base URL
+ * @returns An array of workspace objects
+ */
+export async function fetchWorkspaces(
+    accessToken: string,
+    siteUrl: string,
+): Promise<InfisicalWorkspace[]> {
+    const normalizedBase = siteUrl.replace(/\/+$/, '');
+    const url = `${normalizedBase}/api/v1/workspaces`;
+
+    const res = await fetch(url, {
+        method: 'GET',
+        headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Accept': 'application/json',
+        },
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+
+    if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`Infisical workspaces request failed (${res.status}): ${body}`);
+    }
+
+    const data: unknown = await res.json();
+    if (
+        !data ||
+        typeof data !== 'object' ||
+        !Array.isArray((data as Record<string, unknown>).workspaces)
+    ) {
+        throw new Error('Unexpected response format from Infisical workspaces endpoint');
+    }
+
+    return (data as { workspaces: InfisicalWorkspace[] }).workspaces;
+}
+
+/**
+ * Resolves a project identifier to an Infisical workspace ID.
+ * If the value is already a GUID, it is returned as-is.
+ * Otherwise, it is treated as a project slug and resolved via the API.
+ *
+ * @param credentials - The Infisical credentials
+ * @param project - A workspace ID (GUID) or project slug
+ * @param outputChannel - Output channel for logging
+ * @returns The resolved workspace ID
+ */
+export async function resolveWorkspaceId(
+    credentials: InfisicalCredentials,
+    project: string,
+    outputChannel: vscode.OutputChannel,
+): Promise<string> {
+    if (isGuid(project)) {
+        return project;
+    }
+
+    const siteUrl = credentials.siteUrl ?? INFISICAL_DEFAULT_BASE_URL;
+    const tokenResponse = await authenticate(credentials, siteUrl, outputChannel);
+    const workspaces = await fetchWorkspaces(tokenResponse.accessToken, siteUrl);
+    const match = workspaces.find((ws) => ws.slug === project);
+
+    if (!match) {
+        const available = workspaces.map((ws) => ws.slug).join(', ');
+        throw new Error(
+            `No Infisical workspace found with slug "${project}". Available slugs: ${available}`,
+        );
+    }
+
+    return match.id;
 }

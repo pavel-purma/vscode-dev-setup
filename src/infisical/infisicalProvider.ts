@@ -39,9 +39,15 @@ export class InfisicalProvider implements SecretsProvider {
         const rawSecretPath = providerParams?.secretPath;
         const secretPath = typeof rawSecretPath === 'string' && rawSecretPath.length > 0 ? rawSecretPath : DEFAULT_SECRET_PATH;
 
+        const workspaceId = await infisicalClient.resolveWorkspaceId(
+            credentials,
+            project,
+            ctx.outputChannel,
+        );
+
         return infisicalClient.fetchSecrets(
             credentials,
-            project,       // workspaceId
+            workspaceId,
             config,        // environment slug
             credentials.siteUrl,
             secretPath,
