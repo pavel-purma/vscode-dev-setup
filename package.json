@@ -2,7 +2,7 @@
   "name": "dev-setup",
   "displayName": "Dev Setup",
   "description": "Fetch secrets from Doppler or Infisical and inject them into .env files or terminal sessions for local development",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "pavel-purma",
   "author": "Pavel Purma <pavel@purma.cz> (https://github.com/pavel-purma)",
   "license": "MIT",
