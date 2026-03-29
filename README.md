@@ -114,7 +114,7 @@ secrets:
 | `secrets.provider` | Yes      | The secrets provider. Supported values: `doppler` and `infisical`. |
 | `secrets.loader`   | No*      | How secrets are written locally. Currently only `dotenv` is supported (writes a `.env` file). |
 | `secrets.script`   | No*      | A shell command to run in a new VS Code integrated terminal with all fetched secrets injected as environment variables. The terminal's working directory is set to the config file's directory. |
-| `secrets.project`  | No       | The project name (Doppler project or Infisical workspace slug/ID). If omitted, the **workspace folder name** is used as the default. For Infisical, this can be either a human-readable workspace **slug** or a workspace **ID** (UUID) — see [Infisical Provider](#infisical-provider). |
+| `secrets.project`  | No       | The project name (Doppler project or Infisical project slug/ID). If omitted, the **workspace folder name** is used as the default. For Infisical, this can be either a human-readable project **slug** or a project **ID** (UUID) — see [Infisical Provider](#infisical-provider). |
 | `secrets.batches`  | Yes      | A list of environments/configs to fetch. See [Batch Format](#batch-format). |
 | `secrets.filter`   | No       | An object with optional `include` and `exclude` sub-arrays of regex patterns. See [Filtering Secrets](#filtering-secrets). |
 
@@ -191,6 +191,7 @@ batches:
 When a batch entry contains a **`:`**, the part before the first `:` is the Doppler project and the part after is the config name. This lets you pull secrets from multiple Doppler projects in a single configuration.
 
 For example:
+
 - `my-project:dev` → Doppler project `my-project`, config `dev`
 - `shared-infra:production` → Doppler project `shared-infra`, config `production`
 
@@ -244,19 +245,19 @@ The above fetches secrets from three different paths within the `dev` environmen
 
 > **Note:** When a per-batch path is specified, it **overrides** any `providerParams.secretPath` set at the configuration level.
 
-#### Explicit Workspace — `workspace:environment/path`
+#### Explicit Project — `project:environment/path`
 
 ```yaml
 batches:
-  - my-workspace:dev/backend
+  - my-project:dev/backend
   - shared-secrets:prod/services/api
 ```
 
-When a batch entry contains a **`:`**, the part before the first `:` is the Infisical workspace and the part after follows the environment/path rules above. The workspace value can be either a slug or an ID (see [Automatic Project Slug Resolution](#automatic-project-slug-resolution)).
+When a batch entry contains a **`:`**, the part before the first `:` is the Infisical project and the part after follows the environment/path rules above. The project value can be either a slug or an ID (see [Automatic Project Slug Resolution](#automatic-project-slug-resolution)).
 
-- `my-workspace:dev` → workspace `my-workspace`, environment `dev`, path `/`
-- `my-workspace:dev/backend` → workspace `my-workspace`, environment `dev`, path `/backend`
-- `shared-secrets:prod/services/api` → workspace `shared-secrets`, environment `prod`, path `/services/api`
+- `my-project:dev` → project `my-project`, environment `dev`, path `/`
+- `my-project:dev/backend` → project `my-project`, environment `dev`, path `/backend`
+- `shared-secrets:prod/services/api` → project `shared-secrets`, environment `prod`, path `/services/api`
 
 > **Note:** This environment/path syntax is **Infisical-specific** and does not apply to the Doppler provider. For Doppler, the `/` character has no special meaning in batch entries.
 
@@ -326,23 +327,23 @@ Both values are validated by performing a real authentication request against th
 
 ### Automatic Project Slug Resolution
 
-The `secrets.project` field (and per-batch workspace overrides) accepts either a workspace **slug** (human-readable name) or a workspace **ID** (UUID).
+The `secrets.project` field (and per-batch project overrides) accepts either a project **slug** (human-readable name) or a project **ID** (UUID).
 
-- **Slug** (e.g., `my-platform`) — the extension queries the Infisical API to list your accessible workspaces, finds the one whose slug matches, and resolves it to the underlying workspace ID automatically.
+- **Slug** (e.g., `my-platform`) — the extension queries the Infisical API to list your accessible projects, finds the one whose slug matches, and resolves it to the underlying project ID automatically.
 - **ID** (e.g., `a1b2c3d4-e5f6-7890-abcd-ef1234567890`) — used directly without an API call.
 
-This means you never need to look up or copy opaque UUIDs. Just use the workspace slug that is visible in the Infisical dashboard:
+This means you never need to look up or copy opaque UUIDs. Just use the project slug that is visible in the Infisical dashboard:
 
 ```yaml
 secrets:
   provider: infisical
   loader: dotenv
-  project: my-platform          # workspace slug — resolved automatically
+  project: my-platform          # project slug — resolved automatically
   batches:
     - dev
 ```
 
-If the slug cannot be found, the extension shows an error listing all available workspace slugs so you can correct the value.
+If the slug cannot be found, the extension shows an error listing all available project slugs so you can correct the value.
 
 ### Infisical Configuration Example
 
@@ -368,7 +369,7 @@ secrets:
 This configuration:
 
 1. Authenticates with Infisical using stored Universal Auth credentials.
-2. Resolves the workspace slug `my-platform` to its workspace ID.
+2. Resolves the project slug `my-platform` to its project ID.
 3. Fetches secrets from three folder paths (`/backend`, `/frontend`, `/shared`) within the `dev` environment.
 4. Filters the merged secrets to include only keys starting with `API_` or `DB_`, excluding any ending with `_TEMP`.
 5. Writes the result to a `.env` file, then launches `npm run dev` in a terminal with the secrets as environment variables.
@@ -399,7 +400,7 @@ If `loader` is also configured, the `.env` file is written **before** the script
 
 In a multi-root workspace, **each workspace folder** is processed independently. If a folder contains a `dev-setup.yaml` (or any of the supported config files), secrets are fetched for that folder using its own configuration.
 
-The default project name for each folder (when `secrets.project` is not specified) is the **folder name** of that workspace root. For Infisical, this default name is used as the workspace slug and resolved automatically via the API (see [Automatic Project Slug Resolution](#automatic-project-slug-resolution)).
+The default project name for each folder (when `secrets.project` is not specified) is the **folder name** of that workspace root. For Infisical, this default name is used as the project slug and resolved automatically via the API (see [Automatic Project Slug Resolution](#automatic-project-slug-resolution)).
 
 ## Commands
 
@@ -425,7 +426,7 @@ In practice, this means you can open the same project in WSL today and in a Dev 
 - If no config file is found, the extension silently skips that workspace folder on startup. Use the manual **Fetch Secrets** command to get a warning message.
 - If the Doppler token is missing or expired, the extension will prompt you to log in again.
 - If Infisical credentials are missing or invalid, the extension will prompt you to run **Dev Setup: Login to Infisical**.
-- If an Infisical workspace slug cannot be resolved, the error message lists all available slugs for your account.
+- If an Infisical project slug cannot be resolved, the error message lists all available slugs for your account.
 
 ## License
 

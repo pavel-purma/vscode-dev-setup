@@ -1,8 +1,8 @@
 import * as assert from 'assert';
 import {
     isGuid,
-    fetchWorkspaces,
-    resolveWorkspaceId,
+    fetchProjects,
+    resolveProjectId,
     authenticate,
     fetchSecrets as infisicalFetchSecrets,
     InfisicalCredentials,
@@ -53,24 +53,24 @@ suite('Infisical API Client', () => {
         });
     });
 
-    // ── fetchWorkspaces() ─────────────────────────────────────────────
+    // ── fetchProjects() ───────────────────────────────────────────────
 
-    suite('fetchWorkspaces()', () => {
-        test('successful fetch returns workspace array', async () => {
+    suite('fetchProjects()', () => {
+        test('successful fetch returns project array', async () => {
             fetchMock.install();
 
-            const mockWorkspaces = {
-                workspaces: [
+            const mockProjects = {
+                projects: [
                     { id: 'ws-id-1', name: 'Project Alpha', slug: 'project-alpha' },
                     { id: 'ws-id-2', name: 'Project Beta', slug: 'project-beta' },
                 ],
             };
             fetchMock.addResponse(
-                'https://app.infisical.com/api/v1/workspaces',
-                { status: 200, body: JSON.stringify(mockWorkspaces) },
+                'https://app.infisical.com/api/v1/projects',
+                { status: 200, body: JSON.stringify(mockProjects) },
             );
 
-            const result = await fetchWorkspaces('mock-access-token', 'https://app.infisical.com');
+            const result = await fetchProjects('mock-access-token', 'https://app.infisical.com');
 
             assert.strictEqual(result.length, 2);
             assert.strictEqual(result[0].id, 'ws-id-1');
@@ -87,12 +87,12 @@ suite('Infisical API Client', () => {
             fetchMock.install();
 
             fetchMock.addResponse(
-                'https://app.infisical.com/api/v1/workspaces',
+                'https://app.infisical.com/api/v1/projects',
                 { status: 403, body: 'Forbidden' },
             );
 
             await assert.rejects(
-                () => fetchWorkspaces('bad-token', 'https://app.infisical.com'),
+                () => fetchProjects('bad-token', 'https://app.infisical.com'),
                 (err: unknown) => {
                     assert.ok(err instanceof Error);
                     assert.ok(
@@ -104,16 +104,16 @@ suite('Infisical API Client', () => {
             );
         });
 
-        test('unexpected response format (missing workspaces key) throws', async () => {
+        test('unexpected response format (missing projects key) throws', async () => {
             fetchMock.install();
 
             fetchMock.addResponse(
-                'https://app.infisical.com/api/v1/workspaces',
-                { status: 200, body: JSON.stringify({ projects: [] }) },
+                'https://app.infisical.com/api/v1/projects',
+                { status: 200, body: JSON.stringify({ items: [] }) },
             );
 
             await assert.rejects(
-                () => fetchWorkspaces('mock-token', 'https://app.infisical.com'),
+                () => fetchProjects('mock-token', 'https://app.infisical.com'),
                 (err: unknown) => {
                     assert.ok(err instanceof Error);
                     assert.ok(
@@ -126,21 +126,21 @@ suite('Infisical API Client', () => {
         });
     });
 
-    // ── resolveWorkspaceId() ──────────────────────────────────────────
+    // ── resolveProjectId() ────────────────────────────────────────────
 
-    suite('resolveWorkspaceId()', () => {
+    suite('resolveProjectId()', () => {
         test('GUID project returns as-is without any API calls', async () => {
             fetchMock.install();
 
-            const credentials: InfisicalCredentials = {
-                clientId: 'client-id',
-                clientSecret: 'client-secret',
-                siteUrl: 'https://app.infisical.com',
-            };
             const fakeOutput = createFakeOutputChannel();
             const guid = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
 
-            const result = await resolveWorkspaceId(credentials, guid, fakeOutput);
+            const result = await resolveProjectId(
+                'mock-access-token',
+                guid,
+                'https://app.infisical.com',
+                fakeOutput,
+            );
 
             assert.strictEqual(result, guid);
 
@@ -149,35 +149,16 @@ suite('Infisical API Client', () => {
             assert.strictEqual(calls.length, 0, 'No API calls should be made for a GUID project');
         });
 
-        test('slug project authenticates, fetches workspaces, and returns matching ID', async () => {
+        test('slug project fetches projects and returns matching ID', async () => {
             fetchMock.install();
 
-            const credentials: InfisicalCredentials = {
-                clientId: 'test-client-id',
-                clientSecret: 'test-client-secret',
-                siteUrl: 'https://app.infisical.com',
-            };
-
-            // Mock auth response
+            // Mock projects response
             fetchMock.addResponse(
-                'https://app.infisical.com/api/v1/auth/universal-auth/login',
+                'https://app.infisical.com/api/v1/projects',
                 {
                     status: 200,
                     body: JSON.stringify({
-                        accessToken: 'resolved-access-token',
-                        expiresIn: 3600,
-                        tokenType: 'Bearer',
-                    }),
-                },
-            );
-
-            // Mock workspaces response
-            fetchMock.addResponse(
-                'https://app.infisical.com/api/v1/workspaces',
-                {
-                    status: 200,
-                    body: JSON.stringify({
-                        workspaces: [
+                        projects: [
                             { id: 'ws-id-alpha', name: 'Alpha', slug: 'alpha' },
                             { id: 'ws-id-beta', name: 'Beta', slug: 'my-project' },
                         ],
@@ -186,46 +167,32 @@ suite('Infisical API Client', () => {
             );
 
             const fakeOutput = createFakeOutputChannel();
-            const result = await resolveWorkspaceId(credentials, 'my-project', fakeOutput);
+            const result = await resolveProjectId(
+                'resolved-access-token',
+                'my-project',
+                'https://app.infisical.com',
+                fakeOutput,
+            );
 
             assert.strictEqual(result, 'ws-id-beta');
 
-            // Verify auth and workspaces calls were made
+            // Verify only projects call was made (no auth call)
             const calls = fetchMock.getCalls();
-            assert.strictEqual(calls.length, 2, 'Should make auth + workspaces calls');
-            assert.ok(calls[0].url.includes('/auth/universal-auth/login'), 'First call should be auth');
-            assert.ok(calls[1].url.includes('/workspaces'), 'Second call should be workspaces');
+            assert.strictEqual(calls.length, 1, 'Should make only projects call');
+            assert.ok(calls[0].url.includes('/api/v1/projects'), 'Call should be projects');
+            assert.strictEqual(calls[0].headers['Authorization'], 'Bearer resolved-access-token');
         });
 
         test('slug with no match throws error listing available slugs', async () => {
             fetchMock.install();
 
-            const credentials: InfisicalCredentials = {
-                clientId: 'test-client-id',
-                clientSecret: 'test-client-secret',
-                siteUrl: 'https://app.infisical.com',
-            };
-
-            // Mock auth response
+            // Mock projects response — no matching slug
             fetchMock.addResponse(
-                'https://app.infisical.com/api/v1/auth/universal-auth/login',
+                'https://app.infisical.com/api/v1/projects',
                 {
                     status: 200,
                     body: JSON.stringify({
-                        accessToken: 'resolved-access-token',
-                        expiresIn: 3600,
-                        tokenType: 'Bearer',
-                    }),
-                },
-            );
-
-            // Mock workspaces response — no matching slug
-            fetchMock.addResponse(
-                'https://app.infisical.com/api/v1/workspaces',
-                {
-                    status: 200,
-                    body: JSON.stringify({
-                        workspaces: [
+                        projects: [
                             { id: 'ws-1', name: 'Alpha', slug: 'alpha' },
                             { id: 'ws-2', name: 'Beta', slug: 'beta' },
                         ],
@@ -236,11 +203,16 @@ suite('Infisical API Client', () => {
             const fakeOutput = createFakeOutputChannel();
 
             await assert.rejects(
-                () => resolveWorkspaceId(credentials, 'nonexistent-slug', fakeOutput),
+                () => resolveProjectId(
+                    'resolved-access-token',
+                    'nonexistent-slug',
+                    'https://app.infisical.com',
+                    fakeOutput,
+                ),
                 (err: unknown) => {
                     assert.ok(err instanceof Error);
                     assert.ok(
-                        err.message.includes('No Infisical workspace found with slug "nonexistent-slug"'),
+                        err.message.includes('No Infisical project found with slug "nonexistent-slug"'),
                         `Error should mention the missing slug, got: "${err.message}"`,
                     );
                     assert.ok(
@@ -315,21 +287,8 @@ suite('Infisical API Client', () => {
             );
         });
 
-        test('infisicalFetchSecrets should call auth + secrets endpoints', async () => {
+        test('infisicalFetchSecrets should call secrets endpoint with access token', async () => {
             fetchMock.install();
-
-            // Auth mock
-            fetchMock.addResponse(
-                'https://app.infisical.com/api/v1/auth/universal-auth/login',
-                {
-                    status: 200,
-                    body: JSON.stringify({
-                        accessToken: 'test-token',
-                        expiresIn: 3600,
-                        tokenType: 'Bearer',
-                    }),
-                },
-            );
 
             // Secrets mock
             fetchMock.addResponse(
@@ -347,7 +306,7 @@ suite('Infisical API Client', () => {
 
             const fakeOutput = createFakeOutputChannel();
             const secrets = await infisicalFetchSecrets(
-                testCredentials,
+                'test-token',
                 'ws-id-123',
                 'dev',
                 'https://app.infisical.com',
@@ -361,33 +320,21 @@ suite('Infisical API Client', () => {
             });
 
             const calls = fetchMock.getCalls();
-            assert.strictEqual(calls.length, 2, 'Should make auth + secrets calls');
-            assert.ok(calls[0].url.includes('/auth/universal-auth/login'), 'Call 1: auth');
-            assert.ok(calls[1].url.includes('/api/v3/secrets/raw'), 'Call 2: secrets');
+            assert.strictEqual(calls.length, 1, 'Should make only secrets call');
+            assert.ok(calls[0].url.includes('/api/v3/secrets/raw'), 'Call 1: secrets');
+            assert.strictEqual(calls[0].headers['Authorization'], 'Bearer test-token');
             assert.ok(
-                calls[1].url.includes('workspaceId=ws-id-123'),
+                calls[0].url.includes('workspaceId=ws-id-123'),
                 'Secrets URL should include workspaceId param',
             );
             assert.ok(
-                calls[1].url.includes('environment=dev'),
+                calls[0].url.includes('environment=dev'),
                 'Secrets URL should include environment param',
             );
         });
 
         test('infisicalFetchSecrets should extract secretKey/secretValue from response', async () => {
             fetchMock.install();
-
-            fetchMock.addResponse(
-                'https://app.infisical.com/api/v1/auth/universal-auth/login',
-                {
-                    status: 200,
-                    body: JSON.stringify({
-                        accessToken: 'test-token',
-                        expiresIn: 3600,
-                        tokenType: 'Bearer',
-                    }),
-                },
-            );
 
             const mockSecrets = {
                 secrets: [
@@ -403,7 +350,7 @@ suite('Infisical API Client', () => {
 
             const fakeOutput = createFakeOutputChannel();
             const secrets = await infisicalFetchSecrets(
-                testCredentials,
+                'test-token',
                 'ws-id',
                 'production',
                 'https://app.infisical.com',
@@ -421,18 +368,6 @@ suite('Infisical API Client', () => {
             fetchMock.install();
 
             fetchMock.addResponse(
-                'https://app.infisical.com/api/v1/auth/universal-auth/login',
-                {
-                    status: 200,
-                    body: JSON.stringify({
-                        accessToken: 'test-token',
-                        expiresIn: 3600,
-                        tokenType: 'Bearer',
-                    }),
-                },
-            );
-
-            fetchMock.addResponse(
                 'https://app.infisical.com/api/v3/secrets/raw',
                 { status: 403, body: 'Access denied' },
             );
@@ -440,7 +375,7 @@ suite('Infisical API Client', () => {
             const fakeOutput = createFakeOutputChannel();
             await assert.rejects(
                 () => infisicalFetchSecrets(
-                    testCredentials,
+                    'test-token',
                     'ws-id',
                     'dev',
                     'https://app.infisical.com',
@@ -500,19 +435,6 @@ suite('Infisical API Client', () => {
         test('infisicalFetchSecrets should throw timeout error for hung secrets endpoint', async () => {
             fetchMock.install();
 
-            // Auth succeeds
-            fetchMock.addResponse(
-                'https://app.infisical.com/api/v1/auth/universal-auth/login',
-                {
-                    status: 200,
-                    body: JSON.stringify({
-                        accessToken: 'test-token',
-                        expiresIn: 3600,
-                        tokenType: 'Bearer',
-                    }),
-                },
-            );
-
             // Secrets endpoint hangs
             fetchMock.addHandler(
                 'https://app.infisical.com/api/v3/secrets/raw',
@@ -522,17 +444,11 @@ suite('Infisical API Client', () => {
             const origTimeout = AbortSignal.timeout;
             AbortSignal.timeout = ((): AbortSignal => origTimeout.call(AbortSignal, 100)) as typeof AbortSignal.timeout;
 
-            const credentials: InfisicalCredentials = {
-                clientId: 'test-client',
-                clientSecret: 'test-secret',
-                siteUrl: 'https://app.infisical.com',
-            };
-
             try {
                 const fakeOutput = createFakeOutputChannel();
                 await assert.rejects(
                     () => infisicalFetchSecrets(
-                        credentials,
+                        'test-token',
                         'ws-id',
                         'dev',
                         'https://app.infisical.com',

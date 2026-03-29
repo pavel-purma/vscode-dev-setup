@@ -48,16 +48,19 @@ export class InfisicalProvider implements SecretsProvider {
     readonly id = 'infisical';
 
     /**
-     * Fetch secrets from Infisical for a given workspace and environment.
+     * Fetch secrets from Infisical for a given project and environment.
      * Retrieves stored credentials internally from SecretStorage, extracts
      * environment and optional secretPath from the batch string, and
      * delegates to the Infisical client.
+     *
+     * Authenticates once and reuses the access token for both project
+     * slug resolution and secret fetching.
      *
      * If the batch string contains a `/`, the portion before the first
      * `/` is the environment slug and the remainder (including `/`) is
      * used as the secret path, overriding `providerParams.secretPath`.
      *
-     * @param project        - The Infisical project name or workspace ID
+     * @param project        - The Infisical project name or project ID
      * @param batchString    - The environment slug, optionally followed by a secret path (e.g. 'dev', 'dev/backend')
      * @param ctx            - Provider context with secret storage and output channel
      * @param providerParams - Optional provider-specific parameters (e.g. secretPath)
@@ -91,15 +94,23 @@ export class InfisicalProvider implements SecretsProvider {
             `Dev Setup: Infisical batch config parsed — environment: "${parsed.environment}", secretPath: "${secretPath}"`,
         );
 
-        const workspaceId = await infisicalClient.resolveWorkspaceId(
+        // Authenticate once and reuse token for both operations
+        const tokenResponse = await infisicalClient.authenticate(
             credentials,
+            credentials.siteUrl,
+            ctx.outputChannel,
+        );
+
+        const projectId = await infisicalClient.resolveProjectId(
+            tokenResponse.accessToken,
             project,
+            credentials.siteUrl,
             ctx.outputChannel,
         );
 
         return infisicalClient.fetchSecrets(
-            credentials,
-            workspaceId,
+            tokenResponse.accessToken,
+            projectId,
             parsed.environment,
             credentials.siteUrl,
             secretPath,

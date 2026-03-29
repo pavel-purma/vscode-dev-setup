@@ -28,7 +28,7 @@ suite('Infisical Pipeline Integration', () => {
     // ── Infisical end-to-end with project slug ────────────────────────
 
     suite('Infisical end-to-end with project slug', () => {
-        test('full pipeline with project slug resolves to workspace ID', async () => {
+        test('full pipeline with project slug resolves to project ID', async () => {
             // 1. Write config using Infisical with a slug (not a GUID)
             const config = {
                 secrets: {
@@ -50,26 +50,26 @@ suite('Infisical Pipeline Integration', () => {
                 tokenType: 'Bearer',
             });
 
-            // resolveWorkspaceId: auth call
+            // Single auth call (reused for both slug resolution and secret fetching)
             fetchMock.addResponse(
                 `${siteUrl}/api/v1/auth/universal-auth/login`,
                 { status: 200, body: authBody },
             );
 
-            // resolveWorkspaceId: workspaces call
+            // Projects call (for slug resolution)
             fetchMock.addResponse(
-                `${siteUrl}/api/v1/workspaces`,
+                `${siteUrl}/api/v1/projects`,
                 {
                     status: 200,
                     body: JSON.stringify({
-                        workspaces: [
+                        projects: [
                             { id: 'ws-resolved-id', name: 'My Project', slug: 'my-infisical-project' },
                         ],
                     }),
                 },
             );
 
-            // fetchSecrets: secrets call (auth is reused via route match)
+            // Secrets call (uses same token from single auth above)
             fetchMock.addResponse(
                 `${siteUrl}/api/v3/secrets/raw`,
                 {
@@ -112,21 +112,19 @@ suite('Infisical Pipeline Integration', () => {
             await processWorkspaceFolder(fakeFolder, fakeContext, fakeOutput, false);
 
             // 8. Verify fetch calls were made in the right order:
-            //    - Auth (for resolveWorkspaceId)
+            //    - Auth (once, reused for both operations)
             //    - Workspaces
-            //    - Auth (for fetchSecrets)
             //    - Secrets
             const calls = fetchMock.getCalls();
-            assert.strictEqual(calls.length, 4, 'Should make 4 fetch calls: auth, workspaces, auth, secrets');
-            assert.ok(calls[0].url.includes('/auth/universal-auth/login'), 'Call 1: auth for slug resolution');
-            assert.ok(calls[1].url.includes('/api/v1/workspaces'), 'Call 2: workspaces list');
-            assert.ok(calls[2].url.includes('/auth/universal-auth/login'), 'Call 3: auth for fetchSecrets');
-            assert.ok(calls[3].url.includes('/api/v3/secrets/raw'), 'Call 4: secrets fetch');
+            assert.strictEqual(calls.length, 3, 'Should make 3 fetch calls: auth, projects, secrets');
+            assert.ok(calls[0].url.includes('/auth/universal-auth/login'), 'Call 1: auth (single)');
+            assert.ok(calls[1].url.includes('/api/v1/projects'), 'Call 2: projects list');
+            assert.ok(calls[2].url.includes('/api/v3/secrets/raw'), 'Call 3: secrets fetch');
 
-            // 9. Verify the secrets call used the resolved workspace ID
+            // 9. Verify the secrets call used the resolved project ID
             assert.ok(
-                calls[3].url.includes('workspaceId=ws-resolved-id'),
-                `Secrets call should use resolved workspace ID, got: ${calls[3].url}`,
+                calls[2].url.includes('workspaceId=ws-resolved-id'),
+                `Secrets call should use resolved project ID, got: ${calls[2].url}`,
             );
 
             // 10. Read back the .env file
@@ -187,19 +185,19 @@ suite('Infisical Pipeline Integration', () => {
                 tokenType: 'Bearer',
             });
 
-            // resolveWorkspaceId: auth call
+            // Single auth call (reused for both slug resolution and secret fetching)
             fetchMock.addResponse(
                 `${siteUrl}/api/v1/auth/universal-auth/login`,
                 { status: 200, body: authBody },
             );
 
-            // resolveWorkspaceId: workspaces call
+            // Projects call (for slug resolution)
             fetchMock.addResponse(
-                `${siteUrl}/api/v1/workspaces`,
+                `${siteUrl}/api/v1/projects`,
                 {
                     status: 200,
                     body: JSON.stringify({
-                        workspaces: [
+                        projects: [
                             { id: 'ws-resolved-id', name: 'My Project', slug: 'my-infisical-project' },
                         ],
                     }),
@@ -442,14 +440,14 @@ suite('Infisical Pipeline Integration', () => {
         );
 
         fetchMock.addResponse(
-            `${siteUrl}/api/v1/workspaces`,
+            `${siteUrl}/api/v1/projects`,
             {
                 status: 200,
-                body: JSON.stringify({
-                    workspaces: [
-                        { id: 'ws-yaml-id', name: 'YAML Project', slug: 'infisical-yaml-pipeline' },
-                    ],
-                }),
+                    body: JSON.stringify({
+                        projects: [
+                            { id: 'ws-yaml-id', name: 'YAML Project', slug: 'infisical-yaml-pipeline' },
+                        ],
+                    }),
             },
         );
 
@@ -541,14 +539,14 @@ suite('Infisical Pipeline Integration', () => {
         );
 
         fetchMock.addResponse(
-            `${siteUrl}/api/v1/workspaces`,
+            `${siteUrl}/api/v1/projects`,
             {
                 status: 200,
-                body: JSON.stringify({
-                    workspaces: [
-                        { id: 'ws-filter-id', name: 'Filter Project', slug: 'infisical-filter-project' },
-                    ],
-                }),
+                    body: JSON.stringify({
+                        projects: [
+                            { id: 'ws-filter-id', name: 'Filter Project', slug: 'infisical-filter-project' },
+                        ],
+                    }),
             },
         );
 
@@ -640,14 +638,14 @@ suite('Infisical Pipeline Integration', () => {
         );
 
         fetchMock.addResponse(
-            `${siteUrl}/api/v1/workspaces`,
+            `${siteUrl}/api/v1/projects`,
             {
                 status: 200,
-                body: JSON.stringify({
-                    workspaces: [
-                        { id: 'ws-excl-id', name: 'Exclude Project', slug: 'infisical-exclude-project' },
-                    ],
-                }),
+                    body: JSON.stringify({
+                        projects: [
+                            { id: 'ws-excl-id', name: 'Exclude Project', slug: 'infisical-exclude-project' },
+                        ],
+                    }),
             },
         );
 
@@ -740,14 +738,14 @@ suite('Infisical Pipeline Integration', () => {
         );
 
         fetchMock.addResponse(
-            `${siteUrl}/api/v1/workspaces`,
+            `${siteUrl}/api/v1/projects`,
             {
                 status: 200,
-                body: JSON.stringify({
-                    workspaces: [
-                        { id: 'ws-notify-id', name: 'Notify Project', slug: 'infisical-notify-project' },
-                    ],
-                }),
+                    body: JSON.stringify({
+                        projects: [
+                            { id: 'ws-notify-id', name: 'Notify Project', slug: 'infisical-notify-project' },
+                        ],
+                    }),
             },
         );
 
@@ -835,14 +833,14 @@ suite('Infisical Pipeline Integration', () => {
         );
 
         fetchMock.addResponse(
-            `${siteUrl}/api/v1/workspaces`,
+            `${siteUrl}/api/v1/projects`,
             {
                 status: 200,
-                body: JSON.stringify({
-                    workspaces: [
-                        { id: 'ws-silent-id', name: 'Silent Project', slug: 'infisical-silent-project' },
-                    ],
-                }),
+                    body: JSON.stringify({
+                        projects: [
+                            { id: 'ws-silent-id', name: 'Silent Project', slug: 'infisical-silent-project' },
+                        ],
+                    }),
             },
         );
 
@@ -908,7 +906,7 @@ suite('Infisical Pipeline Integration', () => {
 
     // ── Infisical with GUID Project (no slug resolution) ─────────────
 
-    test('Infisical pipeline with GUID project skips workspace resolution', async () => {
+    test('Infisical pipeline with GUID project skips project resolution', async () => {
         const projectGuid = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
         const config = {
             secrets: {
@@ -928,7 +926,7 @@ suite('Infisical Pipeline Integration', () => {
             tokenType: 'Bearer',
         });
 
-        // Only auth + secrets calls (no workspaces call needed)
+        // Only auth + secrets calls (no projects call needed)
         fetchMock.addResponse(
             `${siteUrl}/api/v1/auth/universal-auth/login`,
             { status: 200, body: authBody },
@@ -966,9 +964,9 @@ suite('Infisical Pipeline Integration', () => {
 
         await processWorkspaceFolder(fakeFolder, fakeContext, fakeOutput, false);
 
-        // Verify only auth + secrets calls (no workspaces call)
+        // Verify only auth + secrets calls (no projects call)
         const calls = fetchMock.getCalls();
-        assert.strictEqual(calls.length, 2, 'Should make 2 calls: auth + secrets (no workspaces)');
+        assert.strictEqual(calls.length, 2, 'Should make 2 calls: auth + secrets (no projects)');
         assert.ok(calls[0].url.includes('/auth/universal-auth/login'), 'Call 1: auth');
         assert.ok(calls[1].url.includes('/api/v3/secrets/raw'), 'Call 2: secrets');
 

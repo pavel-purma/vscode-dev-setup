@@ -19,8 +19,8 @@ export interface InfisicalAccessToken {
     tokenType: string;
 }
 
-/** Workspace metadata returned by the Infisical API. */
-export interface InfisicalWorkspace {
+/** Project metadata returned by the Infisical API. */
+export interface InfisicalProject {
     id: string;
     name: string;
     slug: string;
@@ -155,11 +155,11 @@ export async function authenticate(
 }
 
 /**
- * Fetch secrets from the Infisical API for a given workspace and environment.
- * Authenticates first (Universal Auth), then fetches raw secrets.
+ * Fetch secrets from the Infisical API for a given project and environment.
+ * Uses a pre-authenticated access token.
  *
- * @param credentials - The client ID and client secret
- * @param workspaceId - The Infisical workspace ID (maps to project)
+ * @param accessToken - A valid Infisical access token
+ * @param projectId - The Infisical project ID
  * @param environment - The environment slug (maps to config/batch)
  * @param baseUrl - The Infisical API base URL
  * @param secretPath - The folder path for secrets within the environment
@@ -167,24 +167,20 @@ export async function authenticate(
  * @returns A flat map of secret names to their string values
  */
 export async function fetchSecrets(
-    credentials: InfisicalCredentials,
-    workspaceId: string,
+    accessToken: string,
+    projectId: string,
     environment: string,
     baseUrl: string,
     secretPath: string,
     outputChannel: vscode.OutputChannel,
 ): Promise<SecretMap> {
     outputChannel.appendLine(
-        `Dev Setup: Fetching secrets from Infisical — workspace: "${workspaceId}", environment: "${environment}", path: "${secretPath}"`,
+        `Dev Setup: Fetching secrets from Infisical — project: "${projectId}", environment: "${environment}", path: "${secretPath}"`,
     );
 
-    // Step 1: Authenticate to get an access token
-    const tokenResponse = await authenticate(credentials, baseUrl, outputChannel);
-
-    // Step 2: Fetch secrets using the access token
     const normalizedBase = baseUrl.replace(/\/+$/, '');
     const url = new URL(`${normalizedBase}/api/v3/secrets/raw`);
-    url.searchParams.set('workspaceId', workspaceId);
+    url.searchParams.set('workspaceId', projectId);
     url.searchParams.set('environment', environment);
     url.searchParams.set('secretPath', secretPath);
 
@@ -192,7 +188,7 @@ export async function fetchSecrets(
         const response = await fetch(url.toString(), {
             method: 'GET',
             headers: {
-                'Authorization': `Bearer ${tokenResponse.accessToken}`,
+                'Authorization': `Bearer ${accessToken}`,
                 'Accept': 'application/json',
             },
             signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
@@ -201,7 +197,7 @@ export async function fetchSecrets(
         if (!response.ok) {
             const body = await response.text();
             throw new Error(
-                `Infisical API error (${response.status}) fetching secrets for workspace "${workspaceId}", environment "${environment}": ${body}`,
+                `Infisical API error (${response.status}) fetching secrets for project "${projectId}", environment "${environment}": ${body}`,
             );
         }
 
@@ -209,7 +205,7 @@ export async function fetchSecrets(
 
         if (!Array.isArray(data.secrets)) {
             throw new Error(
-                `Infisical API returned unexpected response format for workspace "${workspaceId}", environment "${environment}"`,
+                `Infisical API returned unexpected response format for project "${projectId}", environment "${environment}"`,
             );
         }
 
@@ -230,10 +226,10 @@ export async function fetchSecrets(
         if (err instanceof DOMException && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
             outputChannel.appendLine('Dev Setup: [Error] Infisical API request timed out after 30s');
             vscode.window.showErrorMessage(
-                `Dev Setup: Request timed out fetching secrets for workspace "${workspaceId}", environment "${environment}".`,
+                `Dev Setup: Request timed out fetching secrets for project "${projectId}", environment "${environment}".`,
             );
             throw new Error(
-                `Request timed out fetching secrets for workspace "${workspaceId}", environment "${environment}".`,
+                `Request timed out fetching secrets for project "${projectId}", environment "${environment}".`,
             );
         }
         throw err;
@@ -241,18 +237,18 @@ export async function fetchSecrets(
 }
 
 /**
- * Fetches the list of workspaces from Infisical.
+ * Fetches the list of projects from Infisical.
  *
  * @param accessToken - A valid Infisical access token
  * @param siteUrl - The Infisical API base URL
- * @returns An array of workspace objects
+ * @returns An array of project objects
  */
-export async function fetchWorkspaces(
+export async function fetchProjects(
     accessToken: string,
     siteUrl: string,
-): Promise<InfisicalWorkspace[]> {
+): Promise<InfisicalProject[]> {
     const normalizedBase = siteUrl.replace(/\/+$/, '');
-    const url = `${normalizedBase}/api/v1/workspaces`;
+    const url = `${normalizedBase}/api/v1/projects`;
 
     const res = await fetch(url, {
         method: 'GET',
@@ -265,51 +261,55 @@ export async function fetchWorkspaces(
 
     if (!res.ok) {
         const body = await res.text();
-        throw new Error(`Infisical workspaces request failed (${res.status}): ${body}`);
+        throw new Error(`Infisical projects request failed (${res.status}): ${body}`);
     }
 
     const data: unknown = await res.json();
     if (
         !data ||
         typeof data !== 'object' ||
-        !Array.isArray((data as Record<string, unknown>).workspaces)
+        !Array.isArray((data as Record<string, unknown>).projects)
     ) {
-        throw new Error('Unexpected response format from Infisical workspaces endpoint');
+        throw new Error('Unexpected response format from Infisical projects endpoint');
     }
 
-    return (data as { workspaces: InfisicalWorkspace[] }).workspaces;
+    return (data as { projects: InfisicalProject[] }).projects;
 }
 
 /**
- * Resolves a project identifier to an Infisical workspace ID.
+ * Resolves a project identifier to an Infisical project ID.
  * If the value is already a GUID, it is returned as-is.
  * Otherwise, it is treated as a project slug and resolved via the API.
  *
- * @param credentials - The Infisical credentials
- * @param project - A workspace ID (GUID) or project slug
+ * @param accessToken - A valid Infisical access token
+ * @param project - A project ID (GUID) or project slug
+ * @param siteUrl - The Infisical API base URL
  * @param outputChannel - Output channel for logging
- * @returns The resolved workspace ID
+ * @returns The resolved project ID
  */
-export async function resolveWorkspaceId(
-    credentials: InfisicalCredentials,
+export async function resolveProjectId(
+    accessToken: string,
     project: string,
+    siteUrl: string,
     outputChannel: vscode.OutputChannel,
 ): Promise<string> {
     if (isGuid(project)) {
         return project;
     }
 
-    const siteUrl = credentials.siteUrl ?? INFISICAL_DEFAULT_BASE_URL;
-    const tokenResponse = await authenticate(credentials, siteUrl, outputChannel);
-    const workspaces = await fetchWorkspaces(tokenResponse.accessToken, siteUrl);
-    const match = workspaces.find((ws) => ws.slug === project);
+    outputChannel.appendLine(`Dev Setup: Resolving Infisical project slug "${project}"...`);
+
+    const normalizedSiteUrl = siteUrl.replace(/\/+$/, '') || INFISICAL_DEFAULT_BASE_URL;
+    const projects = await fetchProjects(accessToken, normalizedSiteUrl);
+    const match = projects.find((p) => p.slug === project);
 
     if (!match) {
-        const available = workspaces.map((ws) => ws.slug).join(', ');
-        throw new Error(
-            `No Infisical workspace found with slug "${project}". Available slugs: ${available}`,
-        );
+        const available = projects.map((p) => p.slug).join(', ');
+        const errorMsg = `No Infisical project found with slug "${project}". Available slugs: ${available}`;
+        outputChannel.appendLine(`Dev Setup: [Error] ${errorMsg}`);
+        throw new Error(errorMsg);
     }
 
+    outputChannel.appendLine(`Dev Setup: Resolved slug "${project}" to project ID "${match.id}"`);
     return match.id;
 }
