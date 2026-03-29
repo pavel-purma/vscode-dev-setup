@@ -160,9 +160,13 @@ export async function processWorkspaceFolder(
     const token = await getStoredToken(context.secrets);
     if (!token) {
         outputChannel.appendLine('Dev Setup: No Doppler token found');
-        vscode.window.showInformationMessage(
-            "Doppler token not configured. Use 'Login to Doppler' command first.",
-        );
+        if (manual) {
+            vscode.window.showInformationMessage(
+                "Dev Setup: Doppler token not configured. Use 'Login to Doppler' command first.",
+            );
+        } else {
+            outputChannel.appendLine(`[${folder.name}] Doppler token not configured — skipping.`);
+        }
         return;
     }
 
@@ -240,4 +244,10 @@ export async function processWorkspaceFolder(
     outputChannel.appendLine(
         `Secrets loaded successfully from Doppler for project '${defaultProject}' into ${configDir}/.env`,
     );
+
+    if (manual) {
+        vscode.window.showInformationMessage(
+            `Dev Setup: Secrets loaded successfully for project '${defaultProject}' into .env`,
+        );
+    }
 }

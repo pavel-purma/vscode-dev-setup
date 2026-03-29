@@ -54,7 +54,7 @@ suite('fetchSecrets Integration', () => {
         assert.strictEqual(location.filename, 'dev-setup.json');
     });
 
-    test('should discover JSON config in .dev/ subdirectory', async () => {
+    test('should discover JSON config in dev/ subdirectory', async () => {
         const config = {
             secrets: {
                 provider: 'doppler',
@@ -63,12 +63,12 @@ suite('fetchSecrets Integration', () => {
                 project: 'sub-project',
             },
         };
-        await writeConfigFile(tempDir, config, '.dev');
+        await writeConfigFile(tempDir, config, 'dev');
 
         const fakeOutput = createFakeOutputChannel();
         const location = await findConfig(vscode.Uri.file(tempDir), fakeOutput);
 
-        assert.ok(location, 'Config should be found in .dev/ subdir');
+        assert.ok(location, 'Config should be found in dev/ subdir');
         assert.strictEqual(location.config.secrets?.project, 'sub-project');
         assert.deepStrictEqual(location.config.secrets?.batches, ['staging']);
         assert.strictEqual(location.filename, 'dev-setup.json');
@@ -118,7 +118,7 @@ suite('fetchSecrets Integration', () => {
         assert.strictEqual(location.filename, 'dev-setup.yml');
     });
 
-    test('.dev/dev-setup.yaml should have higher priority than root dev-setup.json', async () => {
+    test('dev/dev-setup.yaml should have higher priority than root dev-setup.json', async () => {
         // Place JSON in workspace root
         const jsonConfig = {
             secrets: {
@@ -130,7 +130,7 @@ suite('fetchSecrets Integration', () => {
         };
         await writeConfigFile(tempDir, jsonConfig);
 
-        // Place YAML in .dev/ subdir (higher priority)
+        // Place YAML in dev/ subdir (higher priority)
         const yamlConfig = {
             secrets: {
                 provider: 'doppler',
@@ -139,17 +139,17 @@ suite('fetchSecrets Integration', () => {
                 project: 'yaml-project',
             },
         };
-        await writeYamlConfigFile(tempDir, yamlConfig, 'dev-setup.yaml', '.dev');
+        await writeYamlConfigFile(tempDir, yamlConfig, 'dev-setup.yaml', 'dev');
 
         const fakeOutput = createFakeOutputChannel();
         const location = await findConfig(vscode.Uri.file(tempDir), fakeOutput);
 
         assert.ok(location, 'Config should be found');
-        assert.strictEqual(location.config.secrets?.project, 'yaml-project', '.dev/ YAML should win over root JSON');
+        assert.strictEqual(location.config.secrets?.project, 'yaml-project', 'dev/ YAML should win over root JSON');
         assert.strictEqual(location.filename, 'dev-setup.yaml');
     });
 
-    test('.dev/dev-setup.json should have higher priority than root dev-setup.yaml', async () => {
+    test('dev/dev-setup.json should have higher priority than root dev-setup.yaml', async () => {
         // Place YAML in workspace root
         const yamlConfig = {
             secrets: {
@@ -161,7 +161,7 @@ suite('fetchSecrets Integration', () => {
         };
         await writeYamlConfigFile(tempDir, yamlConfig, 'dev-setup.yaml');
 
-        // Place JSON in .dev/ subdir (higher priority)
+        // Place JSON in dev/ subdir (higher priority)
         const jsonConfig = {
             secrets: {
                 provider: 'doppler',
@@ -170,17 +170,17 @@ suite('fetchSecrets Integration', () => {
                 project: 'json-subdir-project',
             },
         };
-        await writeConfigFile(tempDir, jsonConfig, '.dev');
+        await writeConfigFile(tempDir, jsonConfig, 'dev');
 
         const fakeOutput = createFakeOutputChannel();
         const location = await findConfig(vscode.Uri.file(tempDir), fakeOutput);
 
         assert.ok(location, 'Config should be found');
-        assert.strictEqual(location.config.secrets?.project, 'json-subdir-project', '.dev/ JSON should win over root YAML');
+        assert.strictEqual(location.config.secrets?.project, 'json-subdir-project', 'dev/ JSON should win over root YAML');
         assert.strictEqual(location.filename, 'dev-setup.json');
     });
 
-    test('YAML in .dev/ should take priority over YAML in root', async () => {
+    test('YAML in dev/ should take priority over YAML in root', async () => {
         // Place YAML in workspace root
         const rootConfig = {
             secrets: {
@@ -192,7 +192,7 @@ suite('fetchSecrets Integration', () => {
         };
         await writeYamlConfigFile(tempDir, rootConfig, 'dev-setup.yaml');
 
-        // Place YAML in .dev/ subdir (higher priority)
+        // Place YAML in dev/ subdir (higher priority)
         const subConfig = {
             secrets: {
                 provider: 'doppler',
@@ -201,13 +201,13 @@ suite('fetchSecrets Integration', () => {
                 project: 'sub-yaml',
             },
         };
-        await writeYamlConfigFile(tempDir, subConfig, 'dev-setup.yaml', '.dev');
+        await writeYamlConfigFile(tempDir, subConfig, 'dev-setup.yaml', 'dev');
 
         const fakeOutput = createFakeOutputChannel();
         const location = await findConfig(vscode.Uri.file(tempDir), fakeOutput);
 
         assert.ok(location, 'Config should be found');
-        assert.strictEqual(location.config.secrets?.project, 'sub-yaml', '.dev/ YAML should win over root YAML');
+        assert.strictEqual(location.config.secrets?.project, 'sub-yaml', 'dev/ YAML should win over root YAML');
         assert.strictEqual(location.filename, 'dev-setup.yaml');
     });
 
@@ -1594,5 +1594,239 @@ suite('fetchSecrets Integration', () => {
             !logLines.some(l => l.includes('Filtered out')),
             'Output should NOT log any filtering message when no filter is configured',
         );
+    });
+
+    // ── Success Notification (manual vs automatic) ───────────────────
+
+    test('manual mode should show success notification after .env write', async () => {
+        // 1. Write config
+        const config = {
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                project: 'notify-project',
+            },
+        };
+        await writeConfigFile(tempDir, config);
+
+        // 2. Install fetch mock
+        fetchMock.install();
+        const mockSecrets = {
+            secrets: {
+                DB_HOST: { raw: 'ref', computed: 'localhost' },
+            },
+        };
+        fetchMock.addResponse(
+            'https://api.doppler.com/v3/configs/config/secrets',
+            { status: 200, body: JSON.stringify(mockSecrets) },
+        );
+
+        // 3. Set up fakes
+        const fakeSecrets = createFakeSecretStorage({
+            'dev-setup.dopplerToken': 'dp.test.mock_token',
+        });
+        const fakeOutput = createFakeOutputChannel();
+        const fakeContext = {
+            secrets: fakeSecrets,
+        } as unknown as vscode.ExtensionContext;
+        const fakeFolder: vscode.WorkspaceFolder = {
+            uri: vscode.Uri.file(tempDir),
+            name: 'notify-test',
+            index: 0,
+        };
+
+        // 4. Spy on showInformationMessage
+        const originalShowInfo = vscode.window.showInformationMessage;
+        const infoCalls: string[] = [];
+        (vscode.window as any).showInformationMessage = (...args: any[]) => {
+            infoCalls.push(args[0]);
+            return Promise.resolve(undefined);
+        };
+
+        try {
+            // 5. Run the pipeline with manual: true
+            await processWorkspaceFolder(fakeFolder, fakeContext, fakeOutput, true);
+
+            // 6. Verify the success notification was shown
+            assert.ok(
+                infoCalls.some(m => m.includes('Dev Setup: Secrets loaded successfully')),
+                'Should show success info notification in manual mode',
+            );
+            assert.ok(
+                infoCalls.some(m => m.includes("project 'notify-project'")),
+                'Notification should contain the project name',
+            );
+        } finally {
+            (vscode.window as any).showInformationMessage = originalShowInfo;
+        }
+    });
+
+    test('automatic mode should NOT show success notification after .env write', async () => {
+        // 1. Write config
+        const config = {
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                project: 'silent-project',
+            },
+        };
+        await writeConfigFile(tempDir, config);
+
+        // 2. Install fetch mock
+        fetchMock.install();
+        const mockSecrets = {
+            secrets: {
+                DB_HOST: { raw: 'ref', computed: 'localhost' },
+            },
+        };
+        fetchMock.addResponse(
+            'https://api.doppler.com/v3/configs/config/secrets',
+            { status: 200, body: JSON.stringify(mockSecrets) },
+        );
+
+        // 3. Set up fakes
+        const fakeSecrets = createFakeSecretStorage({
+            'dev-setup.dopplerToken': 'dp.test.mock_token',
+        });
+        const fakeOutput = createFakeOutputChannel();
+        const fakeContext = {
+            secrets: fakeSecrets,
+        } as unknown as vscode.ExtensionContext;
+        const fakeFolder: vscode.WorkspaceFolder = {
+            uri: vscode.Uri.file(tempDir),
+            name: 'silent-test',
+            index: 0,
+        };
+
+        // 4. Spy on showInformationMessage
+        const originalShowInfo = vscode.window.showInformationMessage;
+        const infoCalls: string[] = [];
+        (vscode.window as any).showInformationMessage = (...args: any[]) => {
+            infoCalls.push(args[0]);
+            return Promise.resolve(undefined);
+        };
+
+        try {
+            // 5. Run the pipeline with manual: false
+            await processWorkspaceFolder(fakeFolder, fakeContext, fakeOutput, false);
+
+            // 6. Verify NO success notification was shown
+            assert.ok(
+                !infoCalls.some(m => m.includes('Secrets loaded successfully')),
+                'Should NOT show success info notification in automatic mode',
+            );
+        } finally {
+            (vscode.window as any).showInformationMessage = originalShowInfo;
+        }
+
+        // 7. Verify the .env was still written successfully
+        const envUri = vscode.Uri.joinPath(vscode.Uri.file(tempDir), '.env');
+        const envContent = new TextDecoder().decode(
+            await vscode.workspace.fs.readFile(envUri),
+        );
+        assert.ok(envContent.includes('DB_HOST=localhost'), '.env should still be written in automatic mode');
+    });
+
+    // ── Missing Doppler Token (manual vs automatic) ──────────────────
+
+    test('automatic mode should NOT show popup when Doppler token is missing', async () => {
+        // 1. Write config
+        const config = {
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                project: 'no-token-project',
+            },
+        };
+        await writeConfigFile(tempDir, config);
+
+        // 2. Set up fakes — no Doppler token stored
+        const fakeSecrets = createFakeSecretStorage({});
+        const fakeOutput = createFakeOutputChannel();
+        const fakeContext = {
+            secrets: fakeSecrets,
+        } as unknown as vscode.ExtensionContext;
+        const fakeFolder: vscode.WorkspaceFolder = {
+            uri: vscode.Uri.file(tempDir),
+            name: 'no-token-auto',
+            index: 0,
+        };
+
+        // 3. Spy on showInformationMessage
+        const originalShowInfo = vscode.window.showInformationMessage;
+        const infoCalls: string[] = [];
+        (vscode.window as any).showInformationMessage = (...args: any[]) => {
+            infoCalls.push(args[0]);
+            return Promise.resolve(undefined);
+        };
+
+        try {
+            // 4. Run the pipeline with manual: false
+            await processWorkspaceFolder(fakeFolder, fakeContext, fakeOutput, false);
+
+            // 5. Verify NO popup was shown
+            assert.ok(
+                !infoCalls.some(m => m.includes('Doppler token not configured')),
+                'Should NOT show info popup for missing token in automatic mode',
+            );
+
+            // 6. Verify the skip was logged to the output channel
+            const logLines = fakeOutput.getLines();
+            assert.ok(
+                logLines.some(l => l.includes('[no-token-auto] Doppler token not configured — skipping.')),
+                'Should log skip message to output channel in automatic mode',
+            );
+        } finally {
+            (vscode.window as any).showInformationMessage = originalShowInfo;
+        }
+    });
+
+    test('manual mode should show popup when Doppler token is missing', async () => {
+        // 1. Write config
+        const config = {
+            secrets: {
+                provider: 'doppler',
+                loader: 'dotenv',
+                batches: ['dev'],
+                project: 'no-token-project',
+            },
+        };
+        await writeConfigFile(tempDir, config);
+
+        // 2. Set up fakes — no Doppler token stored
+        const fakeSecrets = createFakeSecretStorage({});
+        const fakeOutput = createFakeOutputChannel();
+        const fakeContext = {
+            secrets: fakeSecrets,
+        } as unknown as vscode.ExtensionContext;
+        const fakeFolder: vscode.WorkspaceFolder = {
+            uri: vscode.Uri.file(tempDir),
+            name: 'no-token-manual',
+            index: 0,
+        };
+
+        // 3. Spy on showInformationMessage
+        const originalShowInfo = vscode.window.showInformationMessage;
+        const infoCalls: string[] = [];
+        (vscode.window as any).showInformationMessage = (...args: any[]) => {
+            infoCalls.push(args[0]);
+            return Promise.resolve(undefined);
+        };
+
+        try {
+            // 4. Run the pipeline with manual: true
+            await processWorkspaceFolder(fakeFolder, fakeContext, fakeOutput, true);
+
+            // 5. Verify the popup WAS shown with Dev Setup: prefix
+            assert.ok(
+                infoCalls.some(m => m === "Dev Setup: Doppler token not configured. Use 'Login to Doppler' command first."),
+                'Should show info popup with Dev Setup: prefix for missing token in manual mode',
+            );
+        } finally {
+            (vscode.window as any).showInformationMessage = originalShowInfo;
+        }
     });
 });

@@ -4,19 +4,19 @@ import * as vscode from 'vscode';
 suite('Extension Test Suite', () => {
     suiteSetup(async () => {
         // Wait for the extension to activate
-        const ext = vscode.extensions.getExtension('undefined_publisher.dev-setup');
+        const ext = vscode.extensions.getExtension('pavel-purma.dev-setup');
         if (ext && !ext.isActive) {
             await ext.activate();
         }
     });
 
     test('Extension should be present', () => {
-        const ext = vscode.extensions.getExtension('undefined_publisher.dev-setup');
+        const ext = vscode.extensions.getExtension('pavel-purma.dev-setup');
         assert.ok(ext, 'Extension should be installed');
     });
 
     test('Extension should activate', async () => {
-        const ext = vscode.extensions.getExtension('undefined_publisher.dev-setup');
+        const ext = vscode.extensions.getExtension('pavel-purma.dev-setup');
         assert.ok(ext);
         if (!ext.isActive) {
             await ext.activate();
