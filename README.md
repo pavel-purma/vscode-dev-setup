@@ -1,11 +1,11 @@
 # Dev Setup — VS Code Extension
 
-**Dev Setup** is a VS Code extension that automatically fetches development-time secrets from [Doppler](https://www.doppler.com/) and makes them available to your development workflow. It can write secrets to `.env` files, launch scripts with secrets injected as environment variables, or both. It keeps sensitive credentials out of your repository while making them instantly available when you open a project.
+**Dev Setup** is a VS Code extension that automatically fetches development-time secrets from [Doppler](https://www.doppler.com/) or [Infisical](https://infisical.com/) and makes them available to your development workflow. It can write secrets to `.env` files, launch scripts with secrets injected as environment variables, or both. It keeps sensitive credentials out of your repository while making them instantly available when you open a project.
 
 ## How It Works
 
 1. You place a **configuration file** in your repository (or workspace folder).
-2. When VS Code opens the workspace, the extension detects the config, fetches secrets from Doppler, and delivers them based on your configuration — writing a `.env` file, running a script with secrets as environment variables, or both.
+2. When VS Code opens the workspace, the extension detects the config, fetches secrets from your provider (Doppler or Infisical), and delivers them based on your configuration — writing a `.env` file, running a script with secrets as environment variables, or both.
 3. You can also trigger the fetch manually at any time via the Command Palette.
 
 The extension supports **multi-root workspaces** — each workspace folder is processed independently based on its own configuration file.
@@ -16,9 +16,11 @@ The extension supports **multi-root workspaces** — each workspace folder is pr
 
 Install **Dev Setup** from the VS Code Marketplace or from a `.vsix` package.
 
-### 2. Log In to Doppler
+### 2. Log In to Your Secrets Provider
 
-Before secrets can be fetched, you need to provide a Doppler Personal Token:
+Before secrets can be fetched, you need to authenticate with your chosen provider.
+
+#### Doppler
 
 1. Open the Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`).
 2. Run **Dev Setup: Login to Doppler**.
@@ -26,6 +28,16 @@ Before secrets can be fetched, you need to provide a Doppler Personal Token:
 4. Paste the token when prompted.
 
 The token is validated against the Doppler API and stored securely using VS Code's built-in `SecretStorage`. It is **never** persisted in plaintext.
+
+#### Infisical
+
+1. Open the Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`).
+2. Run **Dev Setup: Login to Infisical**.
+3. The extension will offer to open the Infisical dashboard where you can create a Machine Identity with Universal Auth.
+4. Enter your Infisical server URL (defaults to `https://app.infisical.com` for Infisical Cloud — change this if you use a self-hosted instance).
+5. Paste your **Client ID** and **Client Secret** when prompted.
+
+The credentials are validated by authenticating against the Infisical API and stored securely using VS Code's built-in `SecretStorage`. They are **never** persisted in plaintext.
 
 ### 3. Add a Configuration File
 
@@ -99,11 +111,11 @@ secrets:
 
 | Field              | Required | Description |
 |--------------------|----------|-------------|
-| `secrets.provider` | Yes      | The secrets provider. Currently only `doppler` is supported. |
+| `secrets.provider` | Yes      | The secrets provider. Supported values: `doppler` and `infisical`. |
 | `secrets.loader`   | No*      | How secrets are written locally. Currently only `dotenv` is supported (writes a `.env` file). |
 | `secrets.script`   | No*      | A shell command to run in a new VS Code integrated terminal with all fetched secrets injected as environment variables. The terminal's working directory is set to the config file's directory. |
-| `secrets.project`  | No       | The Doppler project name. If omitted, the **workspace folder name** is used as the default project name. |
-| `secrets.batches`  | Yes      | A list of Doppler configs (environments) to fetch. See [Batch Format](#batch-format). |
+| `secrets.project`  | No       | The project name (Doppler project or Infisical workspace slug/ID). If omitted, the **workspace folder name** is used as the default. For Infisical, this can be either a human-readable workspace **slug** or a workspace **ID** (UUID) — see [Infisical Provider](#infisical-provider). |
+| `secrets.batches`  | Yes      | A list of environments/configs to fetch. See [Batch Format](#batch-format). |
 | `secrets.filter`   | No       | An object with optional `include` and `exclude` sub-arrays of regex patterns. See [Filtering Secrets](#filtering-secrets). |
 
 > **\*** At least one of `loader` or `script` must be provided. You can use both together — when you do, the loader runs first (e.g., writes the `.env` file), then the script runs in a new terminal.
@@ -149,9 +161,11 @@ secrets:
 
 ## Batch Format
 
-Each entry in the `batches` array specifies a Doppler **config** (environment) to fetch secrets from. There are two formats:
+Each entry in the `batches` array specifies an environment/config to fetch secrets from. The format varies slightly between providers.
 
-### Simple Format — Config Name Only
+### Doppler Batch Format
+
+#### Simple Format — Config Name Only
 
 ```yaml
 batches:
@@ -166,7 +180,7 @@ For example, in a workspace folder named `my-app` with no explicit `project` fie
 - `dev` → Doppler project `my-app`, config `dev`
 - `staging` → Doppler project `my-app`, config `staging`
 
-### Explicit Format — `project:config`
+#### Explicit Format — `project:config`
 
 ```yaml
 batches:
@@ -179,6 +193,72 @@ When a batch entry contains a **`:`**, the part before the first `:` is the Dopp
 For example:
 - `my-project:dev` → Doppler project `my-project`, config `dev`
 - `shared-infra:production` → Doppler project `shared-infra`, config `production`
+
+### Infisical Batch Format
+
+For the Infisical provider, batch entries specify an **environment** and optionally a **secret path**. This path support allows a single configuration to pull secrets from multiple folders within the same or different environments — for example, splitting backend and frontend secrets into separate Infisical folders while fetching them all in one go.
+
+If the batch name contains a `/`, the part before the first `/` is treated as the environment name and everything from the first `/` onwards (inclusive) is the secret path.
+
+#### Environment Only
+
+```yaml
+batches:
+  - dev
+  - staging
+```
+
+When a batch entry contains **no `/`**, it is the Infisical environment name. The secret path defaults to `/` (or the value of `providerParams.secretPath` if set).
+
+- `dev` → environment `dev`, secret path `/`
+- `staging` → environment `staging`, secret path `/`
+
+#### Environment with Path — `environment/path`
+
+```yaml
+batches:
+  - dev/backend
+  - dev/frontend
+```
+
+When a batch entry contains a **`/`**, the part before the first `/` is the environment and everything from the first `/` onwards is the secret path. Nested paths are supported.
+
+- `dev/backend` → environment `dev`, secret path `/backend`
+- `dev/frontend` → environment `dev`, secret path `/frontend`
+- `prod/services/api` → environment `prod`, secret path `/services/api`
+
+This is particularly useful when your Infisical project organises secrets into folders by service or component:
+
+```yaml
+secrets:
+  provider: infisical
+  loader: dotenv
+  project: my-platform
+  batches:
+    - dev/backend
+    - dev/frontend
+    - dev/shared
+```
+
+The above fetches secrets from three different paths within the `dev` environment and merges them into a single `.env` file.
+
+> **Note:** When a per-batch path is specified, it **overrides** any `providerParams.secretPath` set at the configuration level.
+
+#### Explicit Workspace — `workspace:environment/path`
+
+```yaml
+batches:
+  - my-workspace:dev/backend
+  - shared-secrets:prod/services/api
+```
+
+When a batch entry contains a **`:`**, the part before the first `:` is the Infisical workspace and the part after follows the environment/path rules above. The workspace value can be either a slug or an ID (see [Automatic Project Slug Resolution](#automatic-project-slug-resolution)).
+
+- `my-workspace:dev` → workspace `my-workspace`, environment `dev`, path `/`
+- `my-workspace:dev/backend` → workspace `my-workspace`, environment `dev`, path `/backend`
+- `shared-secrets:prod/services/api` → workspace `shared-secrets`, environment `prod`, path `/services/api`
+
+> **Note:** This environment/path syntax is **Infisical-specific** and does not apply to the Doppler provider. For Doppler, the `/` character has no special meaning in batch entries.
 
 ### Merging Behaviour
 
@@ -226,6 +306,73 @@ The result:
 
 Secrets that are filtered out are logged to the **Dev Setup** output channel for visibility.
 
+## Infisical Provider
+
+This section provides a comprehensive overview of how the extension integrates with [Infisical](https://infisical.com/).
+
+### Authentication
+
+The extension uses Infisical's **Universal Auth** — a machine-identity authentication method based on a Client ID and Client Secret pair. These credentials are obtained by creating a Machine Identity in the Infisical dashboard.
+
+The login flow via **Dev Setup: Login to Infisical** prompts for:
+
+1. **Server URL** — defaults to `https://app.infisical.com` (Infisical Cloud). Change this to your instance URL if you run a self-hosted Infisical server.
+2. **Client ID** — the identifier for your Machine Identity.
+3. **Client Secret** — the secret key for your Machine Identity.
+
+Both values are validated by performing a real authentication request against the `api/v1/auth/universal-auth/login` endpoint. On success, the credentials (including the server URL) are stored in VS Code's `SecretStorage` — they are **never** written to disk in plaintext.
+
+> **Self-hosted support:** Because the server URL is stored alongside the credentials, the extension works seamlessly with both Infisical Cloud and self-hosted instances. Simply enter your instance URL during the login flow.
+
+### Automatic Project Slug Resolution
+
+The `secrets.project` field (and per-batch workspace overrides) accepts either a workspace **slug** (human-readable name) or a workspace **ID** (UUID).
+
+- **Slug** (e.g., `my-platform`) — the extension queries the Infisical API to list your accessible workspaces, finds the one whose slug matches, and resolves it to the underlying workspace ID automatically.
+- **ID** (e.g., `a1b2c3d4-e5f6-7890-abcd-ef1234567890`) — used directly without an API call.
+
+This means you never need to look up or copy opaque UUIDs. Just use the workspace slug that is visible in the Infisical dashboard:
+
+```yaml
+secrets:
+  provider: infisical
+  loader: dotenv
+  project: my-platform          # workspace slug — resolved automatically
+  batches:
+    - dev
+```
+
+If the slug cannot be found, the extension shows an error listing all available workspace slugs so you can correct the value.
+
+### Infisical Configuration Example
+
+A complete Infisical configuration pulling secrets from multiple paths:
+
+```yaml
+secrets:
+  provider: infisical
+  loader: dotenv
+  script: npm run dev
+  project: my-platform
+  batches:
+    - dev/backend
+    - dev/frontend
+    - dev/shared
+  filter:
+    include:
+      - "^API_|^DB_"
+    exclude:
+      - "_TEMP$"
+```
+
+This configuration:
+
+1. Authenticates with Infisical using stored Universal Auth credentials.
+2. Resolves the workspace slug `my-platform` to its workspace ID.
+3. Fetches secrets from three folder paths (`/backend`, `/frontend`, `/shared`) within the `dev` environment.
+4. Filters the merged secrets to include only keys starting with `API_` or `DB_`, excluding any ending with `_TEMP`.
+5. Writes the result to a `.env` file, then launches `npm run dev` in a terminal with the secrets as environment variables.
+
 ## Output
 
 ### `.env` File (Loader)
@@ -252,30 +399,33 @@ If `loader` is also configured, the `.env` file is written **before** the script
 
 In a multi-root workspace, **each workspace folder** is processed independently. If a folder contains a `dev-setup.yaml` (or any of the supported config files), secrets are fetched for that folder using its own configuration.
 
-The default Doppler project name for each folder (when `secrets.project` is not specified) is the **folder name** of that workspace root.
+The default project name for each folder (when `secrets.project` is not specified) is the **folder name** of that workspace root. For Infisical, this default name is used as the workspace slug and resolved automatically via the API (see [Automatic Project Slug Resolution](#automatic-project-slug-resolution)).
 
 ## Commands
 
-| Command                        | Description |
-|--------------------------------|-------------|
-| **Dev Setup: Login to Doppler** | Authenticate with Doppler by providing a Personal Token. The token is validated and stored securely. |
-| **Dev Setup: Fetch Secrets**    | Manually trigger secrets fetching for all workspace folders that have a configuration file. |
+| Command                           | Description |
+|-----------------------------------|-------------|
+| **Dev Setup: Login to Doppler**    | Authenticate with Doppler by providing a Personal Token. The token is validated and stored securely. |
+| **Dev Setup: Login to Infisical**  | Authenticate with Infisical by providing Universal Auth credentials (Client ID, Client Secret, and server URL). The credentials are validated and stored securely. |
+| **Dev Setup: Fetch Secrets**       | Manually trigger secrets fetching for all workspace folders that have a configuration file. |
 
 ## Token Storage & Cross-Environment Access
 
-The Doppler token is stored in **VS Code's SecretStorage** on your local (host) machine — not inside your project, container, or remote environment. This means:
+Provider credentials (Doppler tokens, Infisical Client ID / Client Secret pairs) are stored in **VS Code's SecretStorage** on your local (host) machine — not inside your project, container, or remote environment. This means:
 
-- **One-time setup.** You configure the token once via **Dev Setup: Login to Doppler**, and it's available everywhere VS Code runs.
-- **Works across environments.** Whether you're working in a Dev Container, WSL, or a standard local workspace, they all share the same stored token. No need to re-enter it when switching contexts.
-- **Nothing stored in the project.** The token never appears in your repository, workspace files, or container filesystem. It lives at the VS Code installation level on your computer.
+- **One-time setup.** You configure credentials once via the login command for your provider, and they're available everywhere VS Code runs.
+- **Works across environments.** Whether you're working in a Dev Container, WSL, or a standard local workspace, they all share the same stored credentials. No need to re-enter them when switching contexts.
+- **Nothing stored in the project.** Credentials never appear in your repository, workspace files, or container filesystem. They live at the VS Code installation level on your computer.
 
-In practice, this means you can open the same project in WSL today and in a Dev Container tomorrow without reconfiguring your Doppler credentials.
+In practice, this means you can open the same project in WSL today and in a Dev Container tomorrow without reconfiguring your Doppler or Infisical credentials.
 
 ## Troubleshooting
 
 - Open the **Output** panel (`Ctrl+Shift+U` / `Cmd+Shift+U`) and select **Dev Setup** from the dropdown to see detailed logs.
 - If no config file is found, the extension silently skips that workspace folder on startup. Use the manual **Fetch Secrets** command to get a warning message.
 - If the Doppler token is missing or expired, the extension will prompt you to log in again.
+- If Infisical credentials are missing or invalid, the extension will prompt you to run **Dev Setup: Login to Infisical**.
+- If an Infisical workspace slug cannot be resolved, the error message lists all available slugs for your account.
 
 ## License
 

@@ -174,24 +174,8 @@ export async function processWorkspaceFolder(
         return;
     }
 
-    // 6. Retrieve token via provider
+    // 6. Build provider context
     const ctx: ProviderContext = { secrets: context.secrets, outputChannel };
-    outputChannel.appendLine(`Dev Setup: Retrieving stored ${secretsProvider.displayName} token...`);
-    const token = await secretsProvider.getStoredToken(ctx);
-    if (!token) {
-        outputChannel.appendLine(`Dev Setup: No ${secretsProvider.displayName} token found`);
-        if (manual) {
-            vscode.window.showInformationMessage(
-                `Dev Setup: ${secretsProvider.displayName} token not configured. ` +
-                `Use 'Login to ${secretsProvider.displayName}' command first.`,
-            );
-        } else {
-            outputChannel.appendLine(`[${folder.name}] ${secretsProvider.displayName} token not configured — skipping.`);
-        }
-        return;
-    }
-
-    outputChannel.appendLine(`Dev Setup: ${secretsProvider.displayName} token found`);
 
     // 7. Determine default project name
     const defaultProject = configProject || folder.name;
@@ -210,7 +194,7 @@ export async function processWorkspaceFolder(
                 `Dev Setup: Fetching batch "${batchEntry}" for project "${project}"`,
             );
             const batchSecrets = await secretsProvider.fetchSecrets(
-                token, project, batchConfig, ctx, config.secrets!.providerParams,
+                project, batchConfig, ctx, config.secrets!.providerParams,
             );
 
             // Apply secret key filter if configured

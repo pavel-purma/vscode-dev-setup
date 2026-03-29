@@ -126,7 +126,7 @@ suite('scriptRunner', () => {
         test('truncates long script names', () => {
             const fakeOutput = createFakeOutputChannel();
             // A 40-character script
-            const longScript = 'a]234567890123456789012345678901234567890';
+            const longScript = 'a234567890123456789012345678901234567890';
             assert.strictEqual(longScript.length, 40, 'Test script should be 40 chars');
 
             runScript(longScript, '/workspace', [], fakeOutput);

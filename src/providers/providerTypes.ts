@@ -20,25 +20,19 @@ export interface SecretsProvider {
     readonly id: string;
 
     /**
-     * Retrieve the stored authentication token/credential.
-     * Returns `undefined` when no credential is stored.
-     */
-    getStoredToken(ctx: ProviderContext): Promise<string | undefined>;
-
-    /**
      * Fetch secrets for a given project and config/environment batch.
+     * The provider is responsible for retrieving its own authentication
+     * credentials from the provided context.
      *
-     * @param token      - The authentication token (already retrieved)
-     * @param project    - The project identifier (Doppler project slug, Infisical workspace ID)
-     * @param config     - The config/environment name (Doppler config name, Infisical environment slug)
-     * @param ctx        - Provider context with output channel
+     * @param project        - The project identifier (Doppler project slug, Infisical workspace ID)
+     * @param batchString    - One of the strings from the `batches` array (Doppler config name, Infisical environment slug)
+     * @param ctx            - Provider context with secret storage and output channel
      * @param providerParams - Optional provider-specific parameters from config
      * @returns A flat map of secret names to their string values
      */
     fetchSecrets(
-        token: string,
         project: string,
-        config: string,
+        batchString: string,
         ctx: ProviderContext,
         providerParams?: Record<string, unknown>,
     ): Promise<SecretMap>;
