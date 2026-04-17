@@ -1,8 +1,34 @@
 import * as assert from 'assert';
-import * as vscode from 'vscode';
-import { mergeBatchedSecrets, runScript } from '../../runners/scriptRunner';
+import { EventEmitter, Readable } from 'stream';
+import { mergeBatchedSecrets, runScript, setSpawnImplForTests, SpawnFn } from '../../runners/scriptRunner';
 import { BatchedSecretEntry } from '../../config/configTypes';
 import { createFakeOutputChannel } from '../helpers/fakeOutputChannel';
+
+/**
+ * Minimal fake ChildProcess — an EventEmitter with stdout/stderr Readables.
+ * Tests drive it by emitting data and then a 'close' event.
+ */
+interface FakeChild extends EventEmitter {
+    stdout: Readable;
+    stderr: Readable;
+    emitStdout(chunk: string): void;
+    emitStderr(chunk: string): void;
+    finish(code: number): void;
+}
+
+function createFakeChild(): FakeChild {
+    const ee = new EventEmitter() as FakeChild;
+    const stdout = new Readable({ read(): void { /* push via emit */ } });
+    const stderr = new Readable({ read(): void { /* push via emit */ } });
+    stdout.setEncoding = (): Readable => stdout;
+    stderr.setEncoding = (): Readable => stderr;
+    ee.stdout = stdout;
+    ee.stderr = stderr;
+    ee.emitStdout = (chunk: string): void => { stdout.emit('data', chunk); };
+    ee.emitStderr = (chunk: string): void => { stderr.emit('data', chunk); };
+    ee.finish = (code: number): void => { ee.emit('close', code); };
+    return ee;
+}
 
 suite('scriptRunner', () => {
 
@@ -12,189 +38,158 @@ suite('scriptRunner', () => {
 
         test('single batch returns all secrets', () => {
             const batches: BatchedSecretEntry[] = [
-                {
-                    batchName: 'dev',
-                    secrets: { A: '1', B: '2', C: '3' },
-                },
+                { batchName: 'dev', secrets: { A: '1', B: '2', C: '3' } },
             ];
-
-            const result = mergeBatchedSecrets(batches);
-
-            assert.deepStrictEqual(result, { A: '1', B: '2', C: '3' });
+            assert.deepStrictEqual(
+                mergeBatchedSecrets(batches),
+                { A: '1', B: '2', C: '3' },
+            );
         });
 
         test('multiple batches merge all unique keys', () => {
             const batches: BatchedSecretEntry[] = [
-                {
-                    batchName: 'dev',
-                    secrets: { A: '1', B: '2' },
-                },
-                {
-                    batchName: 'ci',
-                    secrets: { C: '3', D: '4' },
-                },
+                { batchName: 'dev', secrets: { A: '1', B: '2' } },
+                { batchName: 'ci', secrets: { C: '3', D: '4' } },
             ];
-
-            const result = mergeBatchedSecrets(batches);
-
-            assert.deepStrictEqual(result, { A: '1', B: '2', C: '3', D: '4' });
+            assert.deepStrictEqual(
+                mergeBatchedSecrets(batches),
+                { A: '1', B: '2', C: '3', D: '4' },
+            );
         });
 
         test('first-writer-wins on duplicate keys', () => {
             const batches: BatchedSecretEntry[] = [
-                {
-                    batchName: 'dev',
-                    secrets: { KEY: 'a' },
-                },
-                {
-                    batchName: 'ci',
-                    secrets: { KEY: 'b' },
-                },
+                { batchName: 'dev', secrets: { KEY: 'a' } },
+                { batchName: 'ci', secrets: { KEY: 'b' } },
             ];
-
             const result = mergeBatchedSecrets(batches);
-
-            assert.strictEqual(result['KEY'], 'a', 'First batch value should win');
+            assert.strictEqual(result['KEY'], 'a');
             assert.strictEqual(Object.keys(result).length, 1);
         });
 
         test('empty batches array returns empty record', () => {
-            const result = mergeBatchedSecrets([]);
-
-            assert.deepStrictEqual(result, {});
+            assert.deepStrictEqual(mergeBatchedSecrets([]), {});
         });
 
         test('batch with empty secrets contributes nothing', () => {
             const batches: BatchedSecretEntry[] = [
-                {
-                    batchName: 'x',
-                    secrets: {},
-                },
+                { batchName: 'x', secrets: {} },
             ];
-
-            const result = mergeBatchedSecrets(batches);
-
-            assert.deepStrictEqual(result, {});
+            assert.deepStrictEqual(mergeBatchedSecrets(batches), {});
         });
     });
 
     // ── runScript ────────────────────────────────────────────────────
 
     suite('runScript', () => {
-        let terminalOptions: any[];
-        let sentTexts: string[];
-        let showCalls: number;
-        let origCreateTerminal: typeof vscode.window.createTerminal;
-
-        const fakeTerminal: vscode.Terminal = {
-            show: () => { showCalls++; },
-            sendText: (text: string) => { sentTexts.push(text); },
-            name: 'fake',
-            processId: Promise.resolve(undefined),
-            creationOptions: {},
-            exitStatus: undefined,
-            state: { isInteractedWith: false, shell: undefined },
-            dispose: () => {},
-            hide: () => {},
-            shellIntegration: undefined,
-        };
+        let spawnCalls: Array<{ command: string; options: any }>;
+        let child: FakeChild;
 
         setup(() => {
-            terminalOptions = [];
-            sentTexts = [];
-            showCalls = 0;
-            origCreateTerminal = vscode.window.createTerminal;
-            (vscode.window as any).createTerminal = (opts: any) => {
-                terminalOptions.push(opts);
-                return fakeTerminal;
+            spawnCalls = [];
+            child = createFakeChild();
+            const fake: SpawnFn = (command, options) => {
+                spawnCalls.push({ command, options });
+                return child as unknown as import('child_process').ChildProcessWithoutNullStreams;
             };
+            setSpawnImplForTests(fake);
         });
 
         teardown(() => {
-            (vscode.window as any).createTerminal = origCreateTerminal;
+            setSpawnImplForTests(null);
         });
 
-        test('creates terminal with correct name', () => {
+        test('spawns with shell:true, correct cwd, and merged env', async () => {
             const fakeOutput = createFakeOutputChannel();
+            const batches: BatchedSecretEntry[] = [
+                { batchName: 'dev', secrets: { DB_HOST: 'localhost', API_KEY: 'sk-123' } },
+            ];
 
-            runScript('npm start', '/workspace', [], fakeOutput);
+            const promise = runScript('npm start', '/my/project', batches, fakeOutput);
+            child.finish(0);
+            const code = await promise;
 
-            assert.strictEqual(terminalOptions.length, 1);
-            assert.strictEqual(terminalOptions[0].name, 'Dev Setup: npm start');
+            assert.strictEqual(code, 0);
+            assert.strictEqual(spawnCalls.length, 1);
+            assert.strictEqual(spawnCalls[0].command, 'npm start');
+            assert.strictEqual(spawnCalls[0].options.cwd, '/my/project');
+            assert.strictEqual(spawnCalls[0].options.shell, true);
+            assert.strictEqual(spawnCalls[0].options.env.DB_HOST, 'localhost');
+            assert.strictEqual(spawnCalls[0].options.env.API_KEY, 'sk-123');
         });
 
-        test('truncates long script names', () => {
+        test('streams stdout line-by-line into output channel', async () => {
             const fakeOutput = createFakeOutputChannel();
-            // A 40-character script
-            const longScript = 'a234567890123456789012345678901234567890';
-            assert.strictEqual(longScript.length, 40, 'Test script should be 40 chars');
 
-            runScript(longScript, '/workspace', [], fakeOutput);
+            const promise = runScript('echo hi', '/w', [], fakeOutput);
+            child.emitStdout('hello\nworld\npart');
+            child.emitStdout('ial-rest\n');
+            child.finish(0);
+            await promise;
 
-            assert.strictEqual(terminalOptions.length, 1);
-            const expectedName = `Dev Setup: ${longScript.substring(0, 27)}...`;
-            assert.strictEqual(
-                terminalOptions[0].name,
-                expectedName,
-                'Terminal name should be truncated at 27 chars with ellipsis',
+            const lines = fakeOutput.getLines();
+            assert.ok(lines.includes('hello'));
+            assert.ok(lines.includes('world'));
+            assert.ok(lines.includes('partial-rest'));
+        });
+
+        test('streams stderr into output channel too', async () => {
+            const fakeOutput = createFakeOutputChannel();
+
+            const promise = runScript('bad', '/w', [], fakeOutput);
+            child.emitStderr('oops\n');
+            child.finish(1);
+            const code = await promise;
+
+            assert.strictEqual(code, 1);
+            assert.ok(fakeOutput.getLines().includes('oops'));
+        });
+
+        test('flushes residual buffer without trailing newline on close', async () => {
+            const fakeOutput = createFakeOutputChannel();
+
+            const promise = runScript('x', '/w', [], fakeOutput);
+            child.emitStdout('no-newline-tail');
+            child.finish(0);
+            await promise;
+
+            assert.ok(fakeOutput.getLines().includes('no-newline-tail'));
+        });
+
+        test('logs exit code', async () => {
+            const fakeOutput = createFakeOutputChannel();
+
+            const promise = runScript('x', '/w', [], fakeOutput);
+            child.finish(7);
+            await promise;
+
+            assert.ok(
+                fakeOutput.getLines().some(l => l.includes('exited with code 7')),
             );
         });
 
-        test('injects merged secrets as env vars', () => {
+        test('does NOT create a VS Code terminal', async () => {
+            // Sanity: the runner must no longer touch vscode.window.createTerminal.
+            // We verify indirectly by checking no such call path: we simply
+            // assert the spawn mock was used and nothing threw.
             const fakeOutput = createFakeOutputChannel();
-            const batches: BatchedSecretEntry[] = [
-                {
-                    batchName: 'dev',
-                    secrets: { DB_HOST: 'localhost', API_KEY: 'sk-123' },
-                },
-            ];
+            const promise = runScript('x', '/w', [], fakeOutput);
+            child.finish(0);
+            await promise;
+            assert.strictEqual(spawnCalls.length, 1);
+        });
 
-            runScript('npm start', '/workspace', batches, fakeOutput);
-
-            assert.strictEqual(terminalOptions.length, 1);
-            assert.deepStrictEqual(terminalOptions[0].env, {
-                DB_HOST: 'localhost',
-                API_KEY: 'sk-123',
+        test('resolves -1 and logs on spawn throw', async () => {
+            const fakeOutput = createFakeOutputChannel();
+            setSpawnImplForTests(() => {
+                throw new Error('ENOENT');
             });
-        });
 
-        test('sets cwd correctly', () => {
-            const fakeOutput = createFakeOutputChannel();
+            const code = await runScript('x', '/w', [], fakeOutput);
 
-            runScript('npm start', '/my/project', [], fakeOutput);
-
-            assert.strictEqual(terminalOptions.length, 1);
-            assert.strictEqual(terminalOptions[0].cwd, '/my/project');
-        });
-
-        test('calls show() and sendText()', () => {
-            const fakeOutput = createFakeOutputChannel();
-
-            runScript('npm start', '/workspace', [], fakeOutput);
-
-            assert.strictEqual(showCalls, 1, 'show() should be called once');
-            assert.deepStrictEqual(sentTexts, ['npm start'], 'sendText should receive the script');
-        });
-
-        test('logs to output channel', () => {
-            const fakeOutput = createFakeOutputChannel();
-            const batches: BatchedSecretEntry[] = [
-                {
-                    batchName: 'dev',
-                    secrets: { A: '1', B: '2' },
-                },
-            ];
-
-            runScript('npm start', '/workspace', batches, fakeOutput);
-
-            const logLines = fakeOutput.getLines();
+            assert.strictEqual(code, -1);
             assert.ok(
-                logLines.some(l => l.includes('Creating terminal')),
-                'Output should log terminal creation',
-            );
-            assert.ok(
-                logLines.some(l => l.includes('2 environment variable(s)')),
-                'Output should log env var count',
+                fakeOutput.getLines().some(l => l.includes('Failed to spawn') && l.includes('ENOENT')),
             );
         });
     });

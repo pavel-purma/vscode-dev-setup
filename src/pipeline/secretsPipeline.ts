@@ -256,25 +256,33 @@ export async function processWorkspaceFolder(
         );
     }
 
-    // 10. Run script (when configured)
+    // 10. Run script (when configured) — headless, output streamed to channel
+    let scriptExitCode: number | null = null;
     if (script) {
-        runScript(script, configDir, batchedResults, outputChannel);
+        scriptExitCode = await runScript(script, configDir, batchedResults, outputChannel);
     }
 
     // 11. Show success message
     if (manual) {
+        const scriptSuffix = script
+            ? scriptExitCode === 0
+                ? ' and script completed'
+                : ` and script exited with code ${scriptExitCode}`
+            : '';
         if (loader && script) {
-            vscode.window.showInformationMessage(
-                `Dev Setup: Secrets fetched, written to ${configDir}/.env, and script started`,
-            );
+            const fn = scriptExitCode === 0
+                ? vscode.window.showInformationMessage
+                : vscode.window.showWarningMessage;
+            fn(`Dev Setup: Secrets fetched, written to ${configDir}/.env,${scriptSuffix}`);
         } else if (loader) {
             vscode.window.showInformationMessage(
                 `Dev Setup: Secrets fetched and written to ${configDir}/.env`,
             );
         } else {
-            vscode.window.showInformationMessage(
-                'Dev Setup: Secrets fetched and script started',
-            );
+            const fn = scriptExitCode === 0
+                ? vscode.window.showInformationMessage
+                : vscode.window.showWarningMessage;
+            fn(`Dev Setup: Secrets fetched${scriptSuffix}`);
         }
     }
 }

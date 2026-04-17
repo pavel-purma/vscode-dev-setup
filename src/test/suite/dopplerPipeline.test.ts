@@ -10,6 +10,8 @@ import {
     writeConfigFile,
     writeYamlConfigFile,
 } from '../helpers/tempWorkspace';
+import { EventEmitter, Readable } from 'stream';
+import { setSpawnImplForTests, SpawnFn } from '../../runners/scriptRunner';
 
 suite('Doppler Pipeline Integration', () => {
     let tempDir: string;
@@ -916,37 +918,37 @@ suite('Doppler Pipeline Integration', () => {
     // ── Script Pipeline Integration Tests ────────────────────────────
 
     suite('script pipeline integration', () => {
-        let terminalOptions: any[];
-        let sentTexts: string[];
-        let showCalls: number;
-        let origCreateTerminal: typeof vscode.window.createTerminal;
+        let spawnCalls: Array<{ command: string; options: any }>;
+        let exitCode: number;
 
-        const fakeTerminal: vscode.Terminal = {
-            show: () => { showCalls++; },
-            sendText: (text: string) => { sentTexts.push(text); },
-            name: 'fake',
-            processId: Promise.resolve(undefined),
-            creationOptions: {},
-            exitStatus: undefined,
-            state: { isInteractedWith: false, shell: undefined },
-            dispose: () => {},
-            hide: () => {},
-            shellIntegration: undefined,
-        };
+        function makeFakeChild(): EventEmitter & { stdout: Readable; stderr: Readable } {
+            const ee = new EventEmitter() as EventEmitter & {
+                stdout: Readable;
+                stderr: Readable;
+            };
+            const stdout = new Readable({ read(): void { /* noop */ } });
+            const stderr = new Readable({ read(): void { /* noop */ } });
+            stdout.setEncoding = (): Readable => stdout;
+            stderr.setEncoding = (): Readable => stderr;
+            ee.stdout = stdout;
+            ee.stderr = stderr;
+            // Emit close on next tick so `await` resolves deterministically.
+            setImmediate(() => ee.emit('close', exitCode));
+            return ee;
+        }
 
         setup(() => {
-            terminalOptions = [];
-            sentTexts = [];
-            showCalls = 0;
-            origCreateTerminal = vscode.window.createTerminal;
-            (vscode.window as any).createTerminal = (opts: any) => {
-                terminalOptions.push(opts);
-                return fakeTerminal;
+            spawnCalls = [];
+            exitCode = 0;
+            const fake: SpawnFn = (command, options) => {
+                spawnCalls.push({ command, options });
+                return makeFakeChild() as unknown as import('child_process').ChildProcessWithoutNullStreams;
             };
+            setSpawnImplForTests(fake);
         });
 
         teardown(() => {
-            (vscode.window as any).createTerminal = origCreateTerminal;
+            setSpawnImplForTests(null);
         });
 
         test('script-only pipeline: fetches secrets and runs script, no .env written', async () => {
@@ -991,12 +993,12 @@ suite('Doppler Pipeline Integration', () => {
             // 4. Run the pipeline
             await processWorkspaceFolder(fakeFolder, fakeContext, fakeOutput, false);
 
-            // 5. Verify createTerminal was called with correct env vars
-            assert.strictEqual(terminalOptions.length, 1, 'createTerminal should be called once');
-            assert.deepStrictEqual(terminalOptions[0].env, {
-                DB_HOST: 'localhost',
-                API_KEY: 'sk-12345',
-            });
+            // 5. Verify spawn was called with merged env vars + shell:true
+            assert.strictEqual(spawnCalls.length, 1, 'spawn should be called once');
+            assert.strictEqual(spawnCalls[0].command, 'npm start');
+            assert.strictEqual(spawnCalls[0].options.shell, true);
+            assert.strictEqual(spawnCalls[0].options.env.DB_HOST, 'localhost');
+            assert.strictEqual(spawnCalls[0].options.env.API_KEY, 'sk-12345');
 
             // 6. Verify .env file does NOT exist
             const envUri = vscode.Uri.joinPath(vscode.Uri.file(tempDir), '.env');
@@ -1057,8 +1059,8 @@ suite('Doppler Pipeline Integration', () => {
             );
             assert.ok(envContent.includes('DB_HOST=localhost'), '.env should contain secrets');
 
-            // 6. Verify createTerminal was called
-            assert.strictEqual(terminalOptions.length, 1, 'createTerminal should be called once');
+            // 6. Verify spawn was called (script ran headlessly, no terminal)
+            assert.strictEqual(spawnCalls.length, 1, 'spawn should be called once');
         });
 
         test('script-only success message (manual mode)', async () => {
@@ -1111,10 +1113,10 @@ suite('Doppler Pipeline Integration', () => {
                 // 5. Run the pipeline with manual: true
                 await processWorkspaceFolder(fakeFolder, fakeContext, fakeOutput, true);
 
-                // 6. Verify success message mentions script started
+                // 6. Verify success message mentions script completion
                 assert.ok(
-                    infoCalls.some(m => m.includes('script started')),
-                    `Should show success notification mentioning script started, got: ${JSON.stringify(infoCalls)}`,
+                    infoCalls.some(m => m.includes('script completed')),
+                    `Should show success notification mentioning script completed, got: ${JSON.stringify(infoCalls)}`,
                 );
             } finally {
                 (vscode.window as any).showInformationMessage = originalShowInfo;
@@ -1172,17 +1174,65 @@ suite('Doppler Pipeline Integration', () => {
                 // 5. Run the pipeline with manual: true
                 await processWorkspaceFolder(fakeFolder, fakeContext, fakeOutput, true);
 
-                // 6. Verify success message mentions both written to and script started
+                // 6. Verify success message mentions both written to and script completion
                 assert.ok(
                     infoCalls.some(m => m.includes('written to')),
                     `Should mention written to in notification, got: ${JSON.stringify(infoCalls)}`,
                 );
                 assert.ok(
-                    infoCalls.some(m => m.includes('script started')),
-                    `Should mention script started in notification, got: ${JSON.stringify(infoCalls)}`,
+                    infoCalls.some(m => m.includes('script completed')),
+                    `Should mention script completed in notification, got: ${JSON.stringify(infoCalls)}`,
                 );
             } finally {
                 (vscode.window as any).showInformationMessage = originalShowInfo;
+            }
+        });
+
+        test('non-zero script exit shows warning notification (manual mode)', async () => {
+            exitCode = 2;
+            const config = {
+                secrets: {
+                    provider: 'doppler',
+                    script: 'false',
+                    batches: ['dev'],
+                    project: 'fail-project',
+                },
+            };
+            await writeConfigFile(tempDir, config);
+
+            fetchMock.install();
+            fetchMock.addResponse(
+                'https://api.doppler.com/v3/configs/config/secrets',
+                { status: 200, body: JSON.stringify({ secrets: { A: { raw: '1', computed: '1' } } }) },
+            );
+
+            const fakeSecrets = createFakeSecretStorage({
+                'dev-setup.dopplerToken': 'dp.test.mock_token',
+            });
+            const fakeOutput = createFakeOutputChannel();
+            const fakeContext = { secrets: fakeSecrets } as unknown as vscode.ExtensionContext;
+            const fakeFolder: vscode.WorkspaceFolder = {
+                uri: vscode.Uri.file(tempDir),
+                name: 'fail-test',
+                index: 0,
+            };
+
+            const origWarn = vscode.window.showWarningMessage;
+            const warnCalls: string[] = [];
+            (vscode.window as any).showWarningMessage = (...args: any[]) => {
+                warnCalls.push(args[0]);
+                return Promise.resolve(undefined);
+            };
+
+            try {
+                await processWorkspaceFolder(fakeFolder, fakeContext, fakeOutput, true);
+
+                assert.ok(
+                    warnCalls.some(m => m.includes('exited with code 2')),
+                    `Should warn about non-zero exit, got: ${JSON.stringify(warnCalls)}`,
+                );
+            } finally {
+                (vscode.window as any).showWarningMessage = origWarn;
             }
         });
     });
